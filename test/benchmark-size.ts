@@ -27,12 +27,13 @@ const c = {
 console.log(`\n${c.bold}${c.magenta}=== MinMPHash Dictionary Size Benchmark ===${c.reset}`);
 console.log(`${c.bold}Dataset size:${c.reset} ${c.green}${names.length}${c.reset} items\n`);
 
+(async () => {
 for (const level of levels) {
     // Group Header
     console.log(`${c.bold}${c.cyan}➤ Optimization Level ${level}${c.reset}`);
-    console.log(`${c.dim}  ┌──────────┬──────────────┬──────────────────────┬──────────────┐${c.reset}`);
-    console.log(`  │ ${c.bold}${"OnlySet".padEnd(9)}${c.reset}│ ${c.bold}${"JSON Size".padEnd(13)}${c.reset}│ ${c.bold}${"Binary Size (Ratio)".padEnd(21)}${c.reset}│ ${c.bold}${"vs None".padEnd(13)}${c.reset}│`);
-    console.log(`${c.dim}  ├──────────┼──────────────┼──────────────────────┼──────────────┤${c.reset}`);
+    console.log(`${c.dim}  ┌──────────┬──────────────┬──────────────────────┬──────────────────────┬──────────────┐${c.reset}`);
+    console.log(`  │ ${c.bold}${"OnlySet".padEnd(9)}${c.reset}│ ${c.bold}${"JSON Size".padEnd(13)}${c.reset}│ ${c.bold}${"Binary Size (Ratio)".padEnd(21)}${c.reset}│ ${c.bold}${"Gzip Size (Ratio)".padEnd(21)}${c.reset}│ ${c.bold}${"vs None".padEnd(13)}${c.reset}│`);
+    console.log(`${c.dim}  ├──────────┼──────────────┼──────────────────────┼──────────────────────┼──────────────┤${c.reset}`);
 
     let baselineBinarySize = 0;
 
@@ -67,6 +68,16 @@ for (const level of levels) {
         const binarySizeVal = dictBinary.length / 1024;
         const binarySizeKB = binarySizeVal.toFixed(2);
 
+        // 3. Create Compressed Binary (Gzip)
+        const dictCompressed = await createMinMPHashDict(names, {
+            level: level,
+            onlySet: onlySet,
+            outputBinary: true,
+            enableCompression: true
+        });
+        const gzipSizeVal = dictCompressed.length / 1024;
+        const gzipSizeKB = gzipSizeVal.toFixed(2);
+
         // Capture baseline
         if (onlySet === 'none') {
             baselineBinarySize = binarySizeVal;
@@ -74,6 +85,7 @@ for (const level of levels) {
 
         // Calculate Ratio (Binary / JSON)
         const ratio = (binarySizeVal / jsonSizeVal * 100).toFixed(0);
+        const gzipRatio = (gzipSizeVal / jsonSizeVal * 100).toFixed(0);
         
         // Calculate vs None
         const pct = (binarySizeVal / baselineBinarySize * 100).toFixed(1);
@@ -90,6 +102,11 @@ for (const level of levels) {
         else if (binarySizeVal < 20) sizeColor = c.yellow;
         else sizeColor = c.red;
 
+        let gzipColor = c.reset;
+        if (gzipSizeVal < 5) gzipColor = c.green;
+        else if (gzipSizeVal < 20) gzipColor = c.yellow;
+        else gzipColor = c.red;
+
         // Column formatting
         const col1 = ` ${onlySet.padEnd(9)}`;
         const col2 = ` ${jsonSizeKB.padStart(9)} KB `;
@@ -99,9 +116,15 @@ for (const level of levels) {
         const restPart = ratioPart.padEnd(13);
         const col3 = ` ${sizeColor}${binPart}${c.reset}${c.dim}${restPart}${c.reset} `;
         
-        const col4 = ` ${vsNoneColor}${vsNoneStr.padStart(12)}${c.reset} `;
+        const gzipPart = gzipSizeKB.padStart(7);
+        const gzipRatioPart = ` KB (${gzipRatio.padStart(3)}%)`;
+        const gzipRestPart = gzipRatioPart.padEnd(13);
+        const col4 = ` ${gzipColor}${gzipPart}${c.reset}${c.dim}${gzipRestPart}${c.reset} `;
 
-        console.log(`  │${col1}│${col2}│${col3}│${col4}│`);
+        const col5 = ` ${vsNoneColor}${vsNoneStr.padStart(12)}${c.reset} `;
+
+        console.log(`  │${col1}│${col2}│${col3}│${col4}│${col5}│`);
     }
-    console.log(`${c.dim}  └──────────┴──────────────┴──────────────────────┴──────────────┘${c.reset}\n`);
+    console.log(`${c.dim}  └──────────┴──────────────┴──────────────────────┴──────────────────────┴──────────────┘${c.reset}\n`);
 }
+})();

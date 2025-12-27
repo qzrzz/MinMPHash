@@ -182,3 +182,13 @@ export function dictFromCBOR(bin: Uint8Array): IMinMPHashDict {
         seedZeroBitmap: seedZeroBitmap || undefined,
     }
 }
+
+export async function compressIBinary(data: Uint8Array): Promise<Uint8Array> {
+    const stream = new Blob([data as any]).stream().pipeThrough(new CompressionStream("gzip"))
+    return new Uint8Array(await new Response(stream).arrayBuffer())
+}
+
+export async function decompressIBinary(data: Uint8Array): Promise<Uint8Array> {
+    const stream = new Blob([data as any]).stream().pipeThrough(new DecompressionStream("gzip"))
+    return new Uint8Array(await new Response(stream).arrayBuffer())
+}
