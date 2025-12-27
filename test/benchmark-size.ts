@@ -2,13 +2,13 @@
 import { createMinMPHashDict, ValidationMode } from "../src/index";
 import * as fs from 'fs';
 import * as path from 'path';
-
+const __dirname = import.meta.dirname
 // Load names.json
 const namesPath = path.join(__dirname, 'names.json');
 const names = JSON.parse(fs.readFileSync(namesPath, 'utf-8'));
 
-const onlySetOptions: ValidationMode[] = ["none", "4", "8", "16", "32"];
-const levels = [1, 2, 3, 4, 5, 6, 7];
+const onlySetOptions: ValidationMode[] = ["none", "2", "4", "8", "16", "32"];
+const levels = [1, 2, 3, 4, 5, 6];
 
 // ANSI Colors
 const c = {

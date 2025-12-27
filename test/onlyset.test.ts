@@ -23,6 +23,7 @@ describe("MinMPHash onlySet 模式大规模验证", () => {
     it("测试不同指纹位数的误判率与体积", () => {
         const testCases = [
             { mode: "none", label: "无校验" },
+            { mode: "2", label: "2-bit 指纹" },
             { mode: "4", label: "4-bit 指纹" },
             { mode: "8", label: "8-bit 指纹" },
             { mode: "16", label: "16-bit 指纹" },

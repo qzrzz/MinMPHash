@@ -14,8 +14,17 @@ export interface IMinMPHashDict {
     /** * 桶的大小数组 (Uint8)
      * 替代了庞大的 offsets 数组。运行时通过累加此数组恢复 offsets。
      * 空间占用从 N*4 bytes 降至 (N/BucketRate) bytes
+     * 
+     * [优化] 采用 Nibble Packing (4-bit) 存储，长度为 ceil(m/2)
      */
     bucketSizes: Uint8Array
+
+    /**
+     * [优化] 种子零值位图
+     * 长度为 ceil(m/8)
+     * 如果某位为 1，表示对应桶的种子为 0，不再存储在 seedStream 中
+     */
+    seedZeroBitmap?: Uint8Array
 
     /** * 指纹数组
      * - 4-bit: Uint8Array (长度为 n/2)
@@ -28,7 +37,7 @@ export interface IMinMPHashDict {
     validationMode: ValidationMode
 }
 
-export type ValidationMode = "none" | "4" | "8" | "16" | "32"
+export type ValidationMode = "none" | "2" | "4" | "8" | "16" | "32"
 
 /**
  * 创建最小完美哈希字典
@@ -60,7 +69,8 @@ export function createMinMPHashDict(
          *
          *  这会增加字典体积，并且有一定的误判率（即错误地将非数据集的数据误判为数据集内的数据，但数据集内的数据一定正确）
          *  你可以手动选择指纹的位数以权衡体积和误判率
-         *    - "4"  - 4-bit 指纹  (0.5 byte) ~5.6% 误判率
+         *    - "2"  - 2-bit 指纹  (0.25 byte) ~25% 误判率
+         *    - "4"  - 4-bit 指纹  (0.5 byte) ~6.25% 误判率
          *    - "8"  - 8-bit 指纹  (1 byte)   ~0.39%
          *    - "16" - 16-bit 指纹 (2 bytes)  ~0.0015%
          *    - "32" - 32-bit 指纹 (4 bytes)  ~0.00000002% 误判率
@@ -161,20 +171,27 @@ export function createMinMPHashDict(
     }
 
     // -------------------------------------------------
-    // Phase 2: 构建 Bucket Sizes 元数据
+    // Phase 2: 构建 Bucket Sizes 元数据 (Nibble Packing)
     // -------------------------------------------------
-    const bucketSizes = new Uint8Array(m)
+    const bucketSizes = new Uint8Array(Math.ceil(m / 2))
     for (let i = 0; i < m; i++) {
         const len = bestBuckets[i].length
-        // 如果桶大小超过 255 (极不可能，除非 level 设置极大)，这里会溢出
-        if (len > 255) throw new Error("Bucket too large (>255). Decrease level.")
-        bucketSizes[i] = len
+        // 4-bit 限制
+        if (len > 15) throw new Error("Bucket too large (>15). Decrease level.")
+        
+        const byteIdx = i >>> 1
+        if ((i & 1) === 0) {
+            bucketSizes[byteIdx] |= len
+        } else {
+            bucketSizes[byteIdx] |= len << 4
+        }
     }
 
     // -------------------------------------------------
     // Phase 3: Level 1 Consensus 寻找双射种子
     // -------------------------------------------------
     const seedWriter = new VarIntBuffer()
+    const seedZeroBitmap = new Uint8Array(Math.ceil(m / 8))
 
     for (let i = 0; i < m; i++) {
         const bucket = bestBuckets[i]
@@ -182,7 +199,8 @@ export function createMinMPHashDict(
 
         // 空桶或单元素桶不需要搜索，种子存 0
         if (k <= 1) {
-            seedWriter.write(0)
+            // Mark as zero
+            seedZeroBitmap[i >>> 3] |= (1 << (i & 7))
             continue
         }
 
@@ -210,7 +228,11 @@ export function createMinMPHashDict(
             }
 
             if (!collision) {
-                seedWriter.write(s)
+                if (s === 0) {
+                    seedZeroBitmap[i >>> 3] |= (1 << (i & 7))
+                } else {
+                    seedWriter.write(s)
+                }
                 found = true
             } else {
                 s++
@@ -228,6 +250,7 @@ export function createMinMPHashDict(
         seed0: bestSeed0,
         seedStream: seedWriter.toUint8Array(),
         bucketSizes,
+        seedZeroBitmap,
         validationMode,
     }
 
@@ -237,7 +260,9 @@ export function createMinMPHashDict(
     if (validationMode !== "none") {
         // 分配内存
         let fingerprints: Uint8Array | Uint16Array | Uint32Array
-        if (validationMode === "4") {
+        if (validationMode === "2") {
+            fingerprints = new Uint8Array(Math.ceil(n / 4))
+        } else if (validationMode === "4") {
             fingerprints = new Uint8Array(Math.ceil(n / 2))
         } else if (validationMode === "8") {
             fingerprints = new Uint8Array(n)
@@ -261,7 +286,14 @@ export function createMinMPHashDict(
             if (idx >= 0 && idx < n) {
                 const fullHash = murmurHash3_32(key, FP_SEED)
 
-                if (validationMode === "4") {
+                if (validationMode === "2") {
+                    // --- 2-bit 紧凑存储 ---
+                    const fp2 = fullHash & 0x03 // 取低 2 位
+                    const byteIdx = idx >>> 2 // idx / 4
+                    const shift = (idx & 3) << 1 // (idx % 4) * 2
+                    
+                    fingerprints[byteIdx] |= fp2 << shift
+                } else if (validationMode === "4") {
                     // --- 4-bit 紧凑存储 ---
                     const fp4 = fullHash & 0x0f // 取低 4 位
                     const byteIdx = idx >>> 1 // idx / 2
@@ -332,7 +364,12 @@ export class MinMPHash {
         let currentOffset = 0
         for (let i = 0; i < this.m; i++) {
             this.offsets[i] = currentOffset
-            currentOffset += dict.bucketSizes[i]
+            
+            // Unpack Nibble
+            const byte = dict.bucketSizes[i >>> 1]
+            const len = (i & 1) ? (byte >>> 4) : (byte & 0x0f)
+            
+            currentOffset += len
         }
         this.offsets[this.m] = currentOffset // 应该等于 n
 
@@ -340,24 +377,38 @@ export class MinMPHash {
         this.seeds = new Int32Array(this.m)
         let ptr = 0
         const buf = dict.seedStream
+        const bitmap = dict.seedZeroBitmap
+
         for (let i = 0; i < this.m; i++) {
-            let result = 0
-            let shift = 0
-            // VarInt 读取
-            while (true) {
-                const byte = buf[ptr++]
-                result |= (byte & 0x7f) << shift
-                if ((byte & 0x80) === 0) break
-                shift += 7
+            // Check Zero Bitmap
+            let isZero = false
+            if (bitmap) {
+                if ((bitmap[i >>> 3] & (1 << (i & 7))) !== 0) {
+                    isZero = true
+                }
             }
-            this.seeds[i] = result
+
+            if (isZero) {
+                this.seeds[i] = 0
+            } else {
+                let result = 0
+                let shift = 0
+                // VarInt 读取
+                while (true) {
+                    const byte = buf[ptr++]
+                    result |= (byte & 0x7f) << shift
+                    if ((byte & 0x80) === 0) break
+                    shift += 7
+                }
+                this.seeds[i] = result
+            }
         }
 
         // 3. 恢复指纹数据
         if (this.validationMode !== "none" && dict.fingerprints) {
             const raw = dict.fingerprints
             // 处理 JSON 序列化后变成普通数组的情况
-            if (this.validationMode === "4" || this.validationMode === "8") {
+            if (this.validationMode === "2" || this.validationMode === "4" || this.validationMode === "8") {
                 this.fingerprints = raw instanceof Uint8Array ? raw : new Uint8Array(raw as number[])
             } else if (this.validationMode === "16") {
                 this.fingerprints = raw instanceof Uint16Array ? raw : new Uint16Array(raw as number[])
@@ -404,7 +455,15 @@ export class MinMPHash {
         if (this.validationMode !== "none" && this.fingerprints) {
             const fpHash = murmurHash3_32(input, MinMPHash.FP_SEED)
 
-            if (this.validationMode === "4") {
+            if (this.validationMode === "2") {
+                // 2-bit 校验
+                const expectedFp2 = fpHash & 0x03
+                const byteIdx = resultIdx >>> 2
+                const shift = (resultIdx & 3) << 1
+                const storedFp2 = (this.fingerprints[byteIdx] >>> shift) & 0x03
+                
+                if (storedFp2 !== expectedFp2) return -1
+            } else if (this.validationMode === "4") {
                 // 4-bit 校验
                 const expectedFp4 = fpHash & 0x0f
 

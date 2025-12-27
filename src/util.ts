@@ -102,14 +102,14 @@ const CBOR = {
 
 
 
-const MODE_TO_INT: Record<ValidationMode, number> = { none: 0, "4": 1, "8": 2, "16": 3, "32": 4 }
-const INT_TO_MODE: ValidationMode[] = ["none", "4", "8", "16", "32"]
+const MODE_TO_INT: Record<ValidationMode, number> = { none: 0, "4": 1, "8": 2, "16": 3, "32": 4, "2": 5 }
+const INT_TO_MODE: ValidationMode[] = ["none", "4", "8", "16", "32", "2"]
 
 export function dictToCBOR(dict: IMinMPHashDict): Uint8Array {
     const buffer: number[] = []
 
-    // 结构：Array(7) [n, m, seed0, bucketSizes, seedStream, mode, fingerprints]
-    CBOR.encodeArrayHead(7, buffer)
+    // 结构：Array(8) [n, m, seed0, bucketSizes, seedStream, mode, fingerprints, seedZeroBitmap]
+    CBOR.encodeArrayHead(8, buffer)
 
     CBOR.encodeInt(dict.n, buffer)
     CBOR.encodeInt(dict.m, buffer)
@@ -128,12 +128,18 @@ export function dictToCBOR(dict: IMinMPHashDict): Uint8Array {
             // number[] - fallback
             const mode = dict.validationMode
             let typed: Uint8Array | Uint16Array | Uint32Array
-            if (mode === "4" || mode === "8") typed = new Uint8Array(dict.fingerprints)
+            if (mode === "2" || mode === "4" || mode === "8") typed = new Uint8Array(dict.fingerprints)
             else if (mode === "16") typed = new Uint16Array(dict.fingerprints)
             else typed = new Uint32Array(dict.fingerprints)
             fpBytes = new Uint8Array(typed.buffer, typed.byteOffset, typed.byteLength)
         }
         CBOR.encodeBytes(fpBytes, buffer)
+    } else {
+        CBOR.encodeNull(buffer)
+    }
+
+    if (dict.seedZeroBitmap) {
+        CBOR.encodeBytes(dict.seedZeroBitmap, buffer)
     } else {
         CBOR.encodeNull(buffer)
     }
@@ -150,13 +156,13 @@ export function dictFromCBOR(bin: Uint8Array): IMinMPHashDict {
 
     if (!Array.isArray(arr) || arr.length < 7) throw new Error("Invalid CBOR format")
 
-    const [n, m, seed0, bucketSizes, seedStream, modeInt, fpRaw] = arr
+    const [n, m, seed0, bucketSizes, seedStream, modeInt, fpRaw, seedZeroBitmap] = arr
 
     const validationMode = INT_TO_MODE[modeInt] || "none"
     let fingerprints: Uint8Array | Uint16Array | Uint32Array | undefined
 
     if (fpRaw && validationMode !== "none") {
-        if (validationMode === "4" || validationMode === "8") {
+        if (validationMode === "2" || validationMode === "4" || validationMode === "8") {
             fingerprints = fpRaw
         } else if (validationMode === "16") {
             fingerprints = new Uint16Array(fpRaw.buffer, fpRaw.byteOffset, fpRaw.byteLength / 2)
@@ -173,5 +179,6 @@ export function dictFromCBOR(bin: Uint8Array): IMinMPHashDict {
         seedStream,
         validationMode,
         fingerprints,
+        seedZeroBitmap: seedZeroBitmap || undefined,
     }
 }
