@@ -218,11 +218,11 @@ Generally speaking, it is recommended to use the compressed binary format, which
 But JSON is more convenient during development. If the server/CDN supports transparent compression,
 you can use the JSON format directly, and the final volume difference is not big.
 
-## MinMPLookup Usage
+### MinMPLookup Usage
 
 If you have a `Value -> Key` lookup requirement (for example: look up `font family name` by `font file name`, or look up `country` by `city`), and the amount of data is large, you can use `MinMPLookup`. It uses MPHF and differential encoding to greatly compress the mapping relationship.
 
-### Scenario
+#### Scenario
 
 Suppose you have the following mapping:
 
@@ -235,7 +235,7 @@ const lookupMap = {
 // Goal: Input "Shanghai" -> Get "China"
 ```
 
-### Create Lookup Dictionary
+#### Create Lookup Dictionary
 
 ```typescript
 import { createMinMPLookupDict } from "min-mphash";
@@ -256,7 +256,7 @@ const lookupDictBin = createMinMPLookupDict(lookupMap, {
 // fs.writeFileSync("lookup.bin", lookupDictBin);
 ```
 
-### Query
+#### Query
 
 ```typescript
 import { MinMPLookup } from "min-mphash";
@@ -271,7 +271,7 @@ console.log(lookup.query("Unknown City")); // null
 console.log(lookup.keys()); // ["China", "USA", "Japan"]
 ```
 
-### Validation Mode `onlySet`
+#### Validation Mode `onlySet`
 
 Standard minimal perfect hash functions will also return an index within the range for inputs **not in the set**. To solve this problem, `MinMPHash` supports a built-in validation mode to ensure that lookups outside the set return `null`.
 

@@ -208,11 +208,11 @@ let dict = createMinMPHashDict(mySet, { onlySet: "8" });
 但 JSON 开发时比较方便，如果服务器/CDN 支持透明压缩，
 可以直接使用 JSON 格式，最终体积相差不大。
 
-## MinMPLookup 最小完美查找表的使用
+### MinMPLookup 最小完美查找表的使用
 
 如果你有一个 `Value -> Key` 的查找需求（例如：根据`字体文件名`查找`字体家族名`，或者根据`城市`查找`国家`），且数据量较大，可以使用 `MinMPLookup`。它利用 MPHF 和差分编码极大地压缩了映射关系。
 
-### 场景
+#### 场景
 
 假设你有以下映射：
 
@@ -225,7 +225,7 @@ const lookupMap = {
 // 目标：输入 "Shanghai" -> 得到 "China"
 ```
 
-### 创建查找字典
+#### 创建查找字典
 
 ```typescript
 import { createMinMPLookupDict } from "min-mphash";
@@ -246,7 +246,7 @@ const lookupDictBin = createMinMPLookupDict(lookupMap, {
 // fs.writeFileSync("lookup.bin", lookupDictBin);
 ```
 
-### 查询
+#### 查询
 
 ```typescript
 import { MinMPLookup } from "min-mphash";
@@ -261,7 +261,7 @@ console.log(lookup.query("Unknown City")); // null
 console.log(lookup.keys()); // ["China", "USA", "Japan"]
 ```
 
-### 校验模式 `onlySet`
+#### 校验模式 `onlySet`
 
 标准的最小完美哈希函数对于**不在集合中**的输入，也会返回一个范围内的索引。为了解决这个问题，`MinMPHash` 支持内置校验模式，确保让集合外的查找返回 `null`。
 
