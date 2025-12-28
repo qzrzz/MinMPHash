@@ -17,11 +17,10 @@ function bytesOfFingerprints(fp: any): number {
 async function main() {
     const tests: { label: string; opt?: boolean | string }[] = [
         { label: "none", opt: undefined },
-        { label: "false", opt: false },
-        { label: "true (-> 8-bit)", opt: true },
-        { label: "4-bit", opt: "4" },
-        { label: "8-bit", opt: "8" },
-        { label: "16-bit", opt: "16" },
+        { label: "4", opt: "4" },
+        { label: "8", opt: "8" },
+        { label: "16", opt: "16" },
+        { label: "32", opt: "32" },
     ]
 
     const results: any[] = []
