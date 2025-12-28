@@ -1,8 +1,10 @@
 # MinMPHash & MinMPLookup
 
+> Mini Minimal Perfect Hash & Mini Minimal Perfect Lookup
+
 [English README](./README.en.md)
 
-> Mini Minimal Perfect Hash & Mini Minimal Perfect Lookup
+TypeScript/JavaScript 平台上的最小完美哈希与查找工具实现。
 
 `MinMPHash` 可以把一组数量为 n 的字符串映射到 `[0, n-1]` 的整数范围内，且不会有冲突。
 

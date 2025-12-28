@@ -1,8 +1,8 @@
 # MinMPHash & MinMPLookup
 
-[中文 README](./README.zh.md) 
-
 > Mini Minimal Perfect Hash & Mini Minimal Perfect Lookup
+
+[中文 README](./README.zh.md)
 
 `MinMPHash` can map a set of n strings to the integer range `[0, n-1]` without any collisions.
 
