@@ -1,4 +1,4 @@
-import { IMinMPHashDict, ValidationMode } from "."
+import { IMinMPHashDict, IValidationMode } from "./MinMPHash"
 
  
 const CBOR = {
@@ -102,8 +102,8 @@ const CBOR = {
 
 
 
-const MODE_TO_INT: Record<ValidationMode, number> = { none: 0, "4": 1, "8": 2, "16": 3, "32": 4, "2": 5 }
-const INT_TO_MODE: ValidationMode[] = ["none", "4", "8", "16", "32", "2"]
+const MODE_TO_INT: Record<IValidationMode, number> = { none: 0, "4": 1, "8": 2, "16": 3, "32": 4, "2": 5 }
+const INT_TO_MODE: IValidationMode[] = ["none", "4", "8", "16", "32", "2"]
 
 export function dictToCBOR(dict: IMinMPHashDict): Uint8Array {
     const buffer: number[] = []
