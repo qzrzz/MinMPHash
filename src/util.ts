@@ -1,5 +1,38 @@
 import { IMinMPHashDict, IValidationMode } from "./MinMPHash"
 
+export function writeVarInt(val: number, buffer: number[] | Uint8Array, offset?: number): number {
+  let bytes = 0;
+  while (val >= 0x80) {
+    const b = (val & 0x7f) | 0x80;
+    if (Array.isArray(buffer)) {
+      buffer.push(b);
+    } else if (offset !== undefined) {
+      buffer[offset + bytes] = b;
+    }
+    val >>>= 7;
+    bytes++;
+  }
+  if (Array.isArray(buffer)) {
+    buffer.push(val);
+  } else if (offset !== undefined) {
+    buffer[offset + bytes] = val;
+  }
+  return bytes + 1;
+}
+
+export function readVarInt(buffer: Uint8Array, offset: number): { value: number; bytes: number } {
+  let val = 0;
+  let shift = 0;
+  let bytes = 0;
+  while (true) {
+    const b = buffer[offset + bytes];
+    val |= (b & 0x7f) << shift;
+    bytes++;
+    if ((b & 0x80) === 0) break;
+    shift += 7;
+  }
+  return { value: val, bytes };
+}
  
 const CBOR = {
     // 写入无符号整数

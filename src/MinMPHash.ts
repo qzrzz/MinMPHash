@@ -418,7 +418,7 @@ export function createMinMPHashDict(
  * ```
  */
 export class MinMPHash {
-  private n: number;
+  public n: number;
   private m: number;
   private seed0: number;
   private hashSeed: number;
