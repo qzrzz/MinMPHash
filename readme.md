@@ -118,13 +118,13 @@ let found = Object.entries(FontMapWithHash).find(([family, hashes]) =>
 
 ## 如何使用 MinMPHash 库？
 
-### 1. 安装
+### 安装
 
 ```bash
 npm install min-mphash
 ```
 
-### 2. 基础用法：最小完美哈希 (MinMPHash)
+### 最小完美哈希 (MinMPHash)
 
 这是最核心的功能，用于将一组字符串映射到 `[0, n-1]` 的整数。
 
@@ -146,10 +146,9 @@ const dictBuffer = createMinMPHashDict(mySet, {
 });
 
 fs.writeFileSync("mph-dict.bin", dictBuffer);
-
 ```
 
-#### 步骤 2: 使用字典 (运行时)
+#### 步骤 2: 使用字典生成哈希值 (运行时)
 
 在你的应用（如浏览器端）加载字典并进行哈希查询。
 
@@ -171,11 +170,11 @@ console.log(mph.hash("Cherry")); // 4
 console.log(mph.hash("sdfsd94jx#*")); // 可能返回 1
 ```
 
-### 3. 高级用法：压缩查找表 (MinMPLookup)
+## MinMPLookup 最小完美查找表
 
 如果你有一个 `Value -> Key` 的查找需求（例如：根据`字体文件名`查找`字体家族名`，或者根据`城市`查找`国家`），且数据量较大，可以使用 `MinMPLookup`。它利用 MPHF 和差分编码极大地压缩了映射关系。
 
-#### 场景
+### 场景
 
 假设你有以下映射：
 
@@ -188,7 +187,7 @@ const lookupMap = {
 // 目标：输入 "Shanghai" -> 得到 "China"
 ```
 
-#### 步骤 1: 创建查找字典
+### 创建查找字典
 
 ```typescript
 import { createMinMPLookupDict } from "min-mphash";
@@ -210,7 +209,7 @@ const lookupDictBin = createMinMPLookupDict(lookupMap, {
 // fs.writeFileSync("lookup.bin", lookupDictBin);
 ```
 
-#### 步骤 2: 查询
+### 查询
 
 ```typescript
 import { MinMPLookup } from "min-mphash";
@@ -220,11 +219,12 @@ const lookup = await MinMPLookup.fromCompressed(lookupDictBin);
 // 如果没有开启 enableCompression，使用 MinMPLookup.fromBinary(bin)
 
 console.log(lookup.query("Shanghai")); // "China"
-console.log(lookup.query("New York")); // "USA"
+console.log(lookup.queryAll("New York")); // ["USA"]
 console.log(lookup.query("Unknown City")); // null
+console.log(lookup.keys()); // ["China", "USA", "Japan"]
 ```
 
-### 4. 校验模式 (Validation Mode)
+### 校验模式 (Validation Mode)
 
 标准的最小完美哈希函数对于**不在集合中**的输入，也会返回一个范围内的索引（误报）。为了解决这个问题，`MinMPHash` 支持内置校验指纹。
 
@@ -254,7 +254,7 @@ console.log(mph.hash("NotInSet")); // -1
 
 ## Beanchmark
 
-## MinMPHash 字典体积测试结果
+### MinMPHash 字典体积测试结果
 
 ```
 
@@ -279,7 +279,7 @@ Dataset json gzip size:   6473.48 KB
 
 ```
 
-## MinMPLookup 字典体积测试结果
+### MinMPLookup 字典体积测试结果
 
 ```
 
