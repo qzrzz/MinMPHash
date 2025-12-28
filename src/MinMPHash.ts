@@ -5,123 +5,127 @@ import {
   decompressIBinary,
 } from "./util";
 
+/**
+ * 最小完美哈希字典的原始数据结构。
+ *
+ * 通常通过 `createMinMPHashDict` 生成，并传递给 `MinMPHash` 构造函数。
+ */
 export interface IMinMPHashDict {
-  /** 元素总数 */
+  /** 原始数据集中的元素总数 */
   n: number;
-  /** 桶数量 */
+  /** 分桶数量 */
   m: number;
-  /** 全局种子 (Level 0) */
+  /** 全局哈希种子 (Level 0) */
   seed0: number;
-  /** * 压缩的种子数据流 (VarInt)
-   * 存储构建每个桶所需的双射种子
+  /**
+   * 压缩后的种子数据流 (VarInt)。
+   * 存储每个桶所需的 Level 1 种子。
    */
   seedStream: Uint8Array;
-  /** * 桶的大小数组 (Uint8)
-   * 替代了庞大的 offsets 数组。运行时通过累加此数组恢复 offsets。
-   * 空间占用从 N*4 bytes 降至 (N/BucketRate) bytes
-   *
-   * [优化] 采用 Nibble Packing (4-bit) 存储，长度为 ceil(m/2)
+  /**
+   * 桶大小数组 (Nibble Packing)。
+   * 存储每个桶的元素数量，用于运行时恢复偏移量。
    */
   bucketSizes: Uint8Array;
 
   /**
-   * [优化] 种子零值位图
-   * 长度为 ceil(m/8)
-   * 如果某位为 1，表示对应桶的种子为 0，不再存储在 seedStream 中
+   * 种子零值位图。
+   * 标记哪些桶的种子为 0，以节省 `seedStream` 空间。
    */
   seedZeroBitmap?: Uint8Array;
 
-  /** * 指纹数组
-   * - 4-bit: Uint8Array (长度为 n/2)
-   * - 8-bit: Uint8Array (长度为 n)
-   * ...
+  /**
+   * 校验指纹数组。
+   * 根据 `validationMode` 的不同，可能为 `Uint8Array`, `Uint16Array` 或 `Uint32Array`。
    */
   fingerprints?: Uint8Array | Uint16Array | Uint32Array | number[];
 
-  /** 校验模式 */
+  /** 当前字典使用的校验模式 */
   validationMode: IValidationMode;
 }
 
+/** 验证模式，当字典在 onlySet 模式下启用 */
 export type IValidationMode = "none" | "2" | "4" | "8" | "16" | "32";
+
 export interface IMinMPHashDictOptions {
-    /** 让 hash 函数只对数据集中数据有效
-     *  如果有无效数据传入，hash 值是 -1
-     *
-     *  启用后，字典会额外存储每条数据的指纹，用于验证输入数据是否合法
-     *
-     *  这会增加字典体积，并且有一定的误判率（即错误地将非数据集的数据误判为数据集内的数据，但数据集内的数据一定正确）
-     *  你可以手动选择指纹的位数以权衡体积和误判率
-     *    - "2"  - 2-bit 指纹  (0.25 byte) ~25% 误判率
-     *    - "4"  - 4-bit 指纹  (0.5 byte) ~6.25% 误判率
-     *    - "8"  - 8-bit 指纹  (1 byte)   ~0.39%
-     *    - "16" - 16-bit 指纹 (2 bytes)  ~0.0015%
-     *    - "32" - 32-bit 指纹 (4 bytes)  ~0.00000002% 误判率
-     *
-     *
-     *  示例字典体积变化 (6000 个数短名字)：
-     * | onlySet 模式 | 体积 | 体积变化 | 百分比 |
-     * | :--- | :--- | :--- | :--- |
-     * | none            | 24.04 KB   | +0 B       | 100%     |
-     * | 4               | 56.50 KB   | +32.46 KB  | 135.0%   |
-     * | 8               | 90.26 KB   | +66.23 KB  | 275.5%   |
-     * | 16              | 104.36 KB  | +80.32 KB  | 334.1%   |
-     */
-    onlySet?: boolean | IValidationMode;
+  /**
+   * 启用校验模式，使 hash 函数仅对原始数据集中的数据有效。
+   *
+   * 如果传入不在数据集中的数据：
+   * - 启用后：hash 值返回 `-1`（有一定误判率）。
+   * - 未启用：hash 值会返回一个 [0, n-1] 之间的索引（即产生冲突）。
+   *
+   * **原理**：字典会额外存储每条数据的指纹（Fingerprint）。这会增加字典体积。
+   *
+   * **误判率说明**：
+   * - `"2"`  - 2-bit 指纹 (0.25 byte/key) ~25% 误判率
+   * - `"4"`  - 4-bit 指纹 (0.5 byte/key)  ~6.25% 误判率
+   * - `"8"`  - 8-bit 指纹 (1 byte/key)    ~0.39% 误判率
+   * - `"16"` - 16-bit 指纹 (2 bytes/key)  ~0.0015% 误判率
+   * - `"32"` - 32-bit 指纹 (4 bytes/key)  ~0.00000002% 误判率
+   *
+   * @default "none" (或 false)
+   * @example
+   * onlySet: "8" // 启用 8-bit 校验，平衡体积与准确性
+   */
+  onlySet?: boolean | IValidationMode;
 
-    /** 字典优化级别 [1-10] , 默认为 5
-     *  level 越大字典体积越小，但是字典构建时间越长
-     * @example
-     * level 1:      112.39 KB   (7.04 ms)
-     * level 2:       55.54 KB   (10.17 ms)
-     * level 3:       37.16 KB   (14.54 ms)
-     * level 4:       28.45 KB   (52.34 ms)
-     * level 5:       24.06 KB   (147.72 ms) (默认)
-     * level 6:       21.30 KB   (446.77 ms)
-     * level 7:       19.76 KB   (922.98 ms)
-     * level 8:       18.72 KB   (4300.21 ms)
-     * level 9:       18.02 KB   (13055.98 ms)
-     * level 10:      17.61 KB   (42884.85 ms)
-     */
-    level?: number;
+  /**
+   * 字典优化级别 [1-10]。
+   *
+   * level 越大，字典体积越小，但构建（Build）时间越长。
+   *
+   * @example
+   * - level 1: 快速构建，体积较大 (约 112 KB)
+   * - level 5: 默认平衡点 (约 24 KB)
+   * - level 10: 极致压缩，构建极慢 (约 17 KB)
+   * @default 5
+   */
+  level?: number;
 
-    /** 是否输出二进制 CBOR 格式的字典 */
-    outputBinary?: boolean;
+  /**
+   * 是否输出二进制 CBOR 格式的字典。
+   *
+   * 如果为 `true`，`createMinMPHashDict` 将返回 `Uint8Array`。
+   * @default false
+   */
+  outputBinary?: boolean;
 
-    /** 是否启用 Gzip 压缩 (仅当 outputBinary 为 true 时有效)
-     *  启用后会返回一个压缩后的 Promise<Uint8Array>，而不是原始 CBOR 二进制数据
-     *  注意：启用后返回的是 Promise<Uint8Array>
-     *
-     *  使用时需要调用 await MinMPHash.fromCompressed() 方法来加载压缩后的字典
-     *
-     */
-    enableCompression?: boolean;
-  }
+  /**
+   * 是否启用 Gzip 压缩。
+   *
+   * **注意**：仅当 `outputBinary` 为 `true` 时有效。
+   * 启用后返回 `Promise<Uint8Array>`，需使用 `MinMPHash.fromCompressed()` 加载。
+   * @default false
+   */
+  enableCompression?: boolean;
+}
 
 /**
- * 创建最小完美哈希字典
+ * 创建最小完美哈希 (MPHF) 字典。
  */
 export function createMinMPHashDict(
   dataSet: string[],
-  options?: {
-    onlySet?: boolean | IValidationMode;
-    level?: number;
+  options?: IMinMPHashDictOptions & {
     outputBinary?: false;
   }
 ): IMinMPHashDict;
+/**
+ * 创建二进制格式的最小完美哈希字典。
+ */
 export function createMinMPHashDict(
   dataSet: string[],
-  options?: {
-    onlySet?: boolean | IValidationMode;
-    level?: number;
+  options: IMinMPHashDictOptions & {
     outputBinary: true;
     enableCompression?: false;
   }
 ): Uint8Array;
+/**
+ * 创建经过 Gzip 压缩的二进制最小完美哈希字典。
+ */
 export function createMinMPHashDict(
   dataSet: string[],
-  options: {
-    onlySet?: boolean | IValidationMode;
-    level?: number;
+  options: IMinMPHashDictOptions & {
     outputBinary: true;
     enableCompression: true;
   }
@@ -355,8 +359,16 @@ export function createMinMPHashDict(
 }
 
 /**
- * 最小完美哈希的哈希函数类
- * 使用时请先通过 createMinMPHashDict 创建字典，然后把字典传入本类构造函数。
+ * 最小完美哈希 (Minimal Perfect Hash) 查询类。
+ *
+ * 该类用于加载由 `createMinMPHashDict` 生成的字典，并提供高效的哈希查询。
+ *
+ * @example
+ * ```ts
+ * const dict = createMinMPHashDict(["apple", "banana"]);
+ * const mph = new MinMPHash(dict);
+ * console.log(mph.hash("apple")); // 0 或 1
+ * ```
  */
 export class MinMPHash {
   private n: number;
@@ -372,11 +384,22 @@ export class MinMPHash {
   private fingerprints: Uint8Array | Uint16Array | Uint32Array | null = null;
   private static readonly FP_SEED = 0x1234abcd;
 
+  /**
+   * 从经过 Gzip 压缩的二进制数据加载字典。
+   *
+   * @param data 压缩后的 Uint8Array 数据
+   * @returns MinMPHash 实例
+   */
   static async fromCompressed(data: Uint8Array): Promise<MinMPHash> {
     const decompressed = await decompressIBinary(data);
     return new MinMPHash(decompressed);
   }
 
+  /**
+   * 构造函数。
+   *
+   * @param dict 字典对象 (`IMinMPHashDict`) 或二进制 CBOR 数据 (`Uint8Array`)
+   */
   constructor(dict: IMinMPHashDict | Uint8Array) {
     if (dict instanceof Uint8Array) {
       dict = dictFromCBOR(dict);
@@ -460,9 +483,14 @@ export class MinMPHash {
   }
 
   /**
-   * 计算哈希值
-   * * @returns [0, n-1] 如果在集合中
-   * @returns -1 如果 key 无效 (且启用了 validationMode)
+   * 计算输入字符串的哈希值。
+   *
+   * @param input 要查询的字符串
+   * @returns
+   * - 如果字符串在原始数据集中：返回其唯一的索引 `[0, n-1]`。
+   * - 如果字符串不在数据集中：
+   *   - 启用了 `onlySet`：返回 `-1` (有极低概率误判为有效索引)。
+   *   - 未启用 `onlySet`：返回一个冲突的索引 `[0, n-1]`。
    */
   public hash(input: string): number {
     if (this.n === 0) return -1;
