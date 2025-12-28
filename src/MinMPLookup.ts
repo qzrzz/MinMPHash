@@ -613,4 +613,11 @@ export class MinMPLookup {
 
     return results.length > 0 ? results : null;
   }
+
+  /**
+   * 获取所有的 keys 列表
+   */
+  keys(): string[] {
+    return this.dict.keys;
+  }
 }
