@@ -1,3 +1,5 @@
+<img src="./cover.jpeg" alt="MinMPHash Logo" width="100%" />
+
 # MinMPHash & MinMPLookup
 
 > Mini Minimal Perfect Hash & Mini Minimal Perfect Lookup
@@ -14,7 +16,7 @@ TypeScript/JavaScript 平台上的最小完美哈希与查找工具实现。
 
 相比原样存储，最小化的查找表可以将体积缩小到原来的 10% 以下（具体压缩率取决于数据集中 values 的信息熵，熵越大压缩效果越好）。
 
-------
+---
 
 `MinMPHash` can map a set of n strings to the integer range `[0, n-1]` without any collisions.
 
