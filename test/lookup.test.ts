@@ -106,9 +106,14 @@ describe("MinMPLookup 查找表详细测试", () => {
     });
 
     it("压缩后的体积应小于未压缩体积 (对于可压缩数据)", async () => {
-      const repetitiveMap = { Key: [] as string[] };
-      for (let i = 0; i < 100; i++)
-        repetitiveMap["Key"].push("RepetitiveStringData" + i);
+      // Create a dataset with repetitive keys to ensure Gzip has something to compress
+      // Since the binary format is already highly optimized for hashes, 
+      // we rely on string compression for the keys part.
+      const repetitiveMap: Record<string, string[]> = {};
+      for (let i = 0; i < 50; i++) {
+        const key = "RepetitiveLongKeyName_CommonPrefix_" + i;
+        repetitiveMap[key] = ["Value" + i];
+      }
 
       const rawBinary = createMinMPLookupDict(repetitiveMap, {
         outputBinary: true,
@@ -118,6 +123,7 @@ describe("MinMPLookup 查找表详细测试", () => {
         enableCompression: true,
       });
 
+      // console.log(`Raw: ${rawBinary.length}, Compressed: ${compressedBinary.length}`);
       expect(compressedBinary.length).toBeLessThan(rawBinary.length);
     });
 

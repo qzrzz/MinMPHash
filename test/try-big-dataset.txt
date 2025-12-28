@@ -67,7 +67,7 @@ Dataset json gzip size:   589.00 KB
 
 
 
-  === MinMPHash Big Dataset Size Benchmark ===
+=== MinMPHash Big Dataset Size Benchmark ===
 Generating dataset of size 1000000...
 Dataset size: 1000000 items
 

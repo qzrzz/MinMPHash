@@ -1,7 +1,7 @@
 import { createMinMPLookupDict, IValidationMode } from "../src/index";
 import * as fs from "fs";
 import * as path from "path";
-import { writeVarInt } from "../src/util";
+import { compressIBinary, writeVarInt } from "../src/util";
 
 const __dirname = import.meta.dirname;
 const distDir = path.join(__dirname, "dist", "benchmark-lookup");
@@ -47,6 +47,29 @@ console.log(
   } keys, ${c.green}${totalValues}${c.reset} values\n`
 );
 
+
+
+
+// Calculate raw JSON size
+let datasetJson = JSON.stringify(lookupMap);
+let datasetGZip = await compressIBinary(Buffer.from(datasetJson, "utf8"));
+console.log(
+  "Dataset json size:".padEnd(25),
+  c.yellow +
+    (Buffer.byteLength(datasetJson, "utf8") / 1024).toFixed(2) +
+    c.reset +
+    " KB"
+);
+console.log(
+  "Dataset json gzip size:".padEnd(25),
+  c.green + (datasetGZip.length / 1024).toFixed(2) + c.reset + " KB\n"
+);
+
+
+
+
+
+
 (async () => {
   for (const level of levels) {
     console.log(`${c.bold}${c.cyan}➤ Optimization Level ${level}${c.reset}`);
@@ -84,17 +107,68 @@ console.log(
         }
 
         // KeyToHashes Size
-        const hashBuffer: number[] = [];
-        for (const hashes of dictObj.keyToHashes) {
-          writeVarInt(hashes.length, hashBuffer);
-          let prev = 0;
-          for (let i = 0; i < hashes.length; i++) {
-            const h = hashes[i];
-            writeVarInt(h - prev, hashBuffer);
-            prev = h;
+        let keyToHashesSize = 0;
+        if (dictObj.valueToKeyIndexes) {
+          // Mode 1 / Hybrid
+          keyToHashesSize = 4 + 4 + 4 + dictObj.valueToKeyIndexes.length;
+          // Add collision map size
+          if (dictObj.collisionMap) {
+             // Estimate collision map size
+             const colBuffer: number[] = [];
+             writeVarInt(dictObj.collisionMap.size, colBuffer);
+             const sortedHashes = Array.from(dictObj.collisionMap.keys()).sort((a, b) => a - b);
+             let prevHash = 0;
+             for (const h of sortedHashes) {
+               writeVarInt(h - prevHash, colBuffer);
+               prevHash = h;
+               const kIndices = dictObj.collisionMap.get(h)!;
+               writeVarInt(kIndices.length, colBuffer);
+               kIndices.sort((a, b) => a - b);
+               let prevKey = 0;
+               for (const k of kIndices) {
+                 writeVarInt(k - prevKey, colBuffer);
+                 prevKey = k;
+               }
+             }
+             keyToHashesSize += 4 + colBuffer.length;
+          } else {
+             keyToHashesSize += 4;
           }
+        } else if (dictObj.keyToHashes) {
+          // Mode 0
+          const hashBuffer: number[] = [];
+          for (const hashes of dictObj.keyToHashes) {
+            writeVarInt(hashes.length, hashBuffer);
+            if (hashes.length === 0) continue;
+
+            // Calculate max delta
+            let maxDelta = 0;
+            let prev = 0;
+            const deltas: number[] = [];
+            for (let i = 0; i < hashes.length; i++) {
+              const h = hashes[i];
+              const delta = h - prev;
+              deltas.push(delta);
+              if (delta > maxDelta) maxDelta = delta;
+              prev = h;
+            }
+
+            // Calculate bits needed
+            let bits = 0;
+            if (maxDelta > 0) {
+              bits = Math.ceil(Math.log2(maxDelta + 1));
+            }
+            
+            hashBuffer.push(bits);
+
+            // Write deltas
+            // Simulate bit writing size
+            const totalBits = bits * hashes.length;
+            const packedBytesLen = Math.ceil(totalBits / 8);
+            for(let k=0; k<packedBytesLen; k++) hashBuffer.push(0);
+          }
+          keyToHashesSize = 4 + hashBuffer.length;
         }
-        const keyToHashesSize = 4 + hashBuffer.length;
 
         const totalCalculated = mphfSize + keysSize + keyToHashesSize;
 

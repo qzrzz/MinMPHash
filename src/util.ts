@@ -228,3 +228,81 @@ export async function decompressIBinary(data: Uint8Array): Promise<Uint8Array> {
     const stream = new Blob([data as any]).stream().pipeThrough(new DecompressionStream("gzip"))
     return new Uint8Array(await new Response(stream).arrayBuffer())
 }
+
+export class BitWriter {
+  private buffer: number[] = [];
+  private currentByte = 0;
+  private bitCount = 0;
+
+  write(value: number, bits: number) {
+    for (let i = 0; i < bits; i++) {
+      const bit = (value >> i) & 1;
+      this.currentByte |= bit << this.bitCount;
+      this.bitCount++;
+      if (this.bitCount === 8) {
+        this.buffer.push(this.currentByte);
+        this.currentByte = 0;
+        this.bitCount = 0;
+      }
+    }
+  }
+
+  flush() {
+    if (this.bitCount > 0) {
+      this.buffer.push(this.currentByte);
+      this.currentByte = 0;
+      this.bitCount = 0;
+    }
+  }
+
+  getData(): Uint8Array {
+    this.flush();
+    return new Uint8Array(this.buffer);
+  }
+}
+
+export class BitReader {
+  private buffer: Uint8Array;
+  private byteOffset = 0;
+  private bitOffset = 0;
+
+  constructor(buffer: Uint8Array) {
+    this.buffer = buffer;
+  }
+
+  read(bits: number): number {
+    let value = 0;
+    for (let i = 0; i < bits; i++) {
+      if (this.byteOffset >= this.buffer.length) {
+        // Should not happen if data is correct
+        return 0; 
+      }
+      const bit = (this.buffer[this.byteOffset] >> this.bitOffset) & 1;
+      value |= bit << i;
+      this.bitOffset++;
+      if (this.bitOffset === 8) {
+        this.byteOffset++;
+        this.bitOffset = 0;
+      }
+    }
+    return value;
+  }
+}
+
+export function readBitsAt(buffer: Uint8Array, bitOffset: number, bitLength: number): number {
+  let value = 0;
+  let currentBit = bitOffset;
+  
+  for (let i = 0; i < bitLength; i++) {
+    const byteIdx = currentBit >>> 3; // Math.floor(currentBit / 8)
+    const bitIdx = currentBit & 7;    // currentBit % 8
+    
+    if (byteIdx >= buffer.length) return 0; // Out of bounds
+    
+    const bit = (buffer[byteIdx] >> bitIdx) & 1;
+    value |= bit << i;
+    currentBit++;
+  }
+  
+  return value;
+}
