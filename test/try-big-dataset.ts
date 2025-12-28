@@ -1,4 +1,4 @@
-import { createMinMPHashDict, IValidationMode } from "../src/index";
+import { createMinMPHashDict, IValidationMode, MinMPHash } from "../src/index";
 import * as fs from "fs";
 import * as path from "path";
 import { compressIBinary } from "../src/util";
@@ -11,10 +11,8 @@ if (!fs.existsSync(distDir)) {
 }
 
 // Configuration
-const datasetSize = parseInt(
-  process.argv[2] || process.env.DATASET_SIZE || "100000",
-  10
-);
+const datasetSize =
+  parseInt(process.argv[2] || process.env.DATASET_SIZE || "0", 10) || 100_000;
 
 // ANSI Colors
 const c = {
@@ -94,6 +92,26 @@ const level = 5;
     });
     const end = performance.now();
     const buildTime = (end - start).toFixed(2);
+
+    // Verify correctness
+    const mph = new MinMPHash(dictObj);
+    const seen = new Uint8Array(names.length);
+    for (const name of names) {
+      const h = mph.hash(name);
+      if (h < 0 || h >= names.length) {
+        throw new Error(
+          `Validation Failed (onlySet=${onlySet}): Hash ${h} out of bounds [0, ${
+            names.length - 1
+          }]`
+        );
+      }
+      if (seen[h] === 1) {
+        throw new Error(
+          `Validation Failed (onlySet=${onlySet}): Collision detected at index ${h}`
+        );
+      }
+      seen[h] = 1;
+    }
 
     // Calculate JSON size
     const jsonString = JSON.stringify(dictObj, (key, value) => {

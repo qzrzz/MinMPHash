@@ -11,36 +11,14 @@ import {
  * 通常通过 `createMinMPHashDict` 生成，并传递给 `MinMPHash` 构造函数。
  */
 export interface IMinMPHashDict {
-  /** 原始数据集中的元素总数 */
   n: number;
-  /** 分桶数量 */
   m: number;
-  /** 全局哈希种子 (Level 0) */
   seed0: number;
-  /**
-   * 压缩后的种子数据流 (VarInt)。
-   * 存储每个桶所需的 Level 1 种子。
-   */
+  hashSeed?: number;
   seedStream: Uint8Array;
-  /**
-   * 桶大小数组 (Nibble Packing)。
-   * 存储每个桶的元素数量，用于运行时恢复偏移量。
-   */
   bucketSizes: Uint8Array;
-
-  /**
-   * 种子零值位图。
-   * 标记哪些桶的种子为 0，以节省 `seedStream` 空间。
-   */
   seedZeroBitmap?: Uint8Array;
-
-  /**
-   * 校验指纹数组。
-   * 根据 `validationMode` 的不同，可能为 `Uint8Array`, `Uint16Array` 或 `Uint32Array`。
-   */
   fingerprints?: Uint8Array | Uint16Array | Uint32Array | number[];
-
-  /** 当前字典使用的校验模式 */
   validationMode: IValidationMode;
 }
 
@@ -110,8 +88,11 @@ export function createMinMPHashDict(
     outputBinary?: false;
   }
 ): IMinMPHashDict;
+
 /**
- * 创建二进制格式的最小完美哈希字典。
+ * 创建最小完美哈希 (MPHF) 字典。
+ *
+ * @param options.outputBinary 输出二进制格式
  */
 export function createMinMPHashDict(
   dataSet: string[],
@@ -120,8 +101,12 @@ export function createMinMPHashDict(
     enableCompression?: false;
   }
 ): Uint8Array;
+
 /**
- * 创建经过 Gzip 压缩的二进制最小完美哈希字典。
+ * 创建最小完美哈希 (MPHF) 字典。
+ *
+ * @param options.outputBinary 输出二进制格式
+ * @param options.enableCompression 启用压缩
  */
 export function createMinMPHashDict(
   dataSet: string[],
@@ -130,14 +115,16 @@ export function createMinMPHashDict(
     enableCompression: true;
   }
 ): Promise<Uint8Array>;
+
+/**
+ * 创建二进制格式的最小完美哈希字典。
+ */
 export function createMinMPHashDict(
-  /** 创建字典的数据 */
   dataSet: string[],
   options?: IMinMPHashDictOptions
 ): IMinMPHashDict | Uint8Array | Promise<Uint8Array> {
   const n = dataSet.length;
 
-  // 空数据集处理
   if (n === 0) {
     const emptyDict: IMinMPHashDict = {
       n: 0,
@@ -152,42 +139,119 @@ export function createMinMPHashDict(
 
   const targetRate = options?.level ?? 5.0;
   let validationMode: IValidationMode = "none";
-  if (options?.onlySet === true) {
-    validationMode = "8";
-  } else if (typeof options?.onlySet === "string") {
+  if (options?.onlySet === true) validationMode = "8";
+  else if (typeof options?.onlySet === "string")
     validationMode = options.onlySet;
-  }
-  const m = Math.max(1, Math.ceil(n / targetRate));
+
+  // For very large datasets, slightly relax the target rate to reduce max bucket size probability
+  const adjustedRate = n > 500000 ? Math.max(1, targetRate * 0.90) : targetRate;
+  const m = Math.max(1, Math.ceil(n / adjustedRate));
 
   // -------------------------------------------------
-  // Phase 1: Level 0 Best-Fit 分桶
-  // 寻找一个 seed0，使得最大桶的尺寸最小，防止极端哈希冲突
+  // Phase 0: Pre-hashing
   // -------------------------------------------------
-  let bestBuckets: string[][] = [];
+  const hashesL = new Uint32Array(n);
+  const hashesH = new Uint32Array(n);
+  let hashSeed = 0;
+
+  // Try to find a seed that produces no collisions
+  while (true) {
+    // Use Map<h1, h2> to detect collisions without BigInt overhead
+    // If h1 collides, we check h2. If h2 also collides, it's a real collision.
+    // Since h1 collisions are rare, we optimize for the common case (unique h1).
+    const seen = new Map<number, number>(); 
+    const complexSeen = new Map<number, Set<number>>(); // For cases where h1 collides
+
+    let collision = false;
+    for (let i = 0; i < n; i++) {
+      const h1 = murmurHash3_32(dataSet[i], hashSeed);
+      const h2 = murmurHash3_32(dataSet[i], ~hashSeed);
+      
+      // Check for collision
+      let isDuplicate = false;
+      if (complexSeen.has(h1)) {
+          const set = complexSeen.get(h1)!;
+          if (set.has(h2)) isDuplicate = true;
+          else set.add(h2);
+      } else if (seen.has(h1)) {
+          const existingH2 = seen.get(h1)!;
+          if (existingH2 === h2) {
+              isDuplicate = true;
+          } else {
+              // Upgrade to complex
+              const set = new Set<number>();
+              set.add(existingH2);
+              set.add(h2);
+              complexSeen.set(h1, set);
+              seen.delete(h1);
+          }
+      } else {
+          seen.set(h1, h2);
+      }
+
+      if (isDuplicate) {
+        collision = true;
+        break;
+      }
+      
+      hashesL[i] = h1;
+      hashesH[i] = h2;
+    }
+
+    if (!collision) break;
+
+    hashSeed++;
+    if (hashSeed > 100) {
+      // Should be extremely rare with 64-bit hashes
+      throw new Error(
+        `Could not find a collision-free hash seed after ${hashSeed} attempts.`
+      );
+    }
+  }
+
+  // -------------------------------------------------
+  // Phase 1: Best-Fit buckets using flat arrays (head/next)
+  // -------------------------------------------------
+  let bestHead = new Int32Array(m).fill(-1);
+  let bestNext = new Int32Array(n).fill(-1);
   let bestSeed0 = 0;
   let minMaxLen = Infinity;
 
-  // 尝试次数：如果 n 很大，尝试次数少一点以免在这里耗时太久；n 小则多试几次
-  const balanceAttempts = n > 100000 ? 20 : 50;
+  const currentHead = new Int32Array(m);
+  const currentNext = new Int32Array(n);
+  const bucketCounts = new Int32Array(m);
 
-  for (let i = 0; i < balanceAttempts; i++) {
+  // Increase attempts for large datasets to ensure we find a balanced distribution
+  // We MUST find a distribution where max bucket size < 16, otherwise bucketSizes (4-bit) will overflow.
+  const maxAttempts = 2000;
+  
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const currentSeed = Math.floor(Math.random() * 0xffffffff);
-    const currentBuckets: string[][] = Array.from({ length: m }, () => []);
+    currentHead.fill(-1);
+    bucketCounts.fill(0);
+
     let currentMaxLen = 0;
 
-    for (const key of dataSet) {
-      const h = murmurHash3_32(key, currentSeed);
-      const bIdx = Math.floor((h / 0x100000000) * m);
-      currentBuckets[bIdx].push(key);
-      if (currentBuckets[bIdx].length > currentMaxLen) {
-        currentMaxLen = currentBuckets[bIdx].length;
-      }
+    for (let i = 0; i < n; i++) {
+      // Fast 64-bit hash simulation for bucket placement
+      // bIdx = ((scramble(low, seed) ^ high) >>> 0) % m
+      const h = (scramble(hashesL[i], currentSeed) ^ hashesH[i]) >>> 0;
+      // Fast range reduction: (x * N) >> 32
+      // Since m can be up to ~10^6, h * m fits in 53-bit float safe integer range
+      const bIdx = Math.floor((h / 4294967296) * m);
+      
+      currentNext[i] = currentHead[bIdx];
+      currentHead[bIdx] = i;
+      bucketCounts[bIdx]++;
+      if (bucketCounts[bIdx] > currentMaxLen)
+        currentMaxLen = bucketCounts[bIdx];
     }
 
-    // 早期退出：如果分布已经非常好了
+    // Ideal case: small buckets
     if (currentMaxLen < 13) {
       bestSeed0 = currentSeed;
-      bestBuckets = currentBuckets;
+      bestHead.set(currentHead);
+      bestNext.set(currentNext);
       minMaxLen = currentMaxLen;
       break;
     }
@@ -195,88 +259,96 @@ export function createMinMPHashDict(
     if (currentMaxLen < minMaxLen) {
       minMaxLen = currentMaxLen;
       bestSeed0 = currentSeed;
-      bestBuckets = currentBuckets;
+      bestHead.set(currentHead);
+      bestNext.set(currentNext);
+    }
+    
+    // If we've tried enough times and still haven't found a valid distribution (<16), keep trying
+    // But if we have a valid one (e.g. 14 or 15), we can stop early if we've tried a reasonable amount
+    if (minMaxLen < 16 && attempt > 50) {
+        break;
     }
   }
 
+  if (minMaxLen >= 16) {
+      throw new Error(`MPHF Build Failed: Could not find a bucket distribution with max size < 16 (best: ${minMaxLen}). Try reducing the optimization level (current: ${options?.level ?? 5}).`);
+  }
+
   // -------------------------------------------------
-  // Phase 2: 构建 Bucket Sizes 元数据 (Nibble Packing)
+  // Phase 2: Build bucketSizes (nibble packed)
   // -------------------------------------------------
   const bucketSizes = new Uint8Array(Math.ceil(m / 2));
   for (let i = 0; i < m; i++) {
-    const len = bestBuckets[i].length;
-
-    const byteIdx = i >>> 1;
-    if ((i & 1) === 0) {
-      bucketSizes[byteIdx] |= len;
-    } else {
-      bucketSizes[byteIdx] |= len << 4;
+    let count = 0;
+    let ptr = bestHead[i];
+    while (ptr !== -1) {
+      count++;
+      ptr = bestNext[ptr];
     }
+    const byteIdx = i >>> 1;
+    if ((i & 1) === 0) bucketSizes[byteIdx] |= count;
+    else bucketSizes[byteIdx] |= count << 4;
   }
 
   // -------------------------------------------------
-  // Phase 3: Level 1 Consensus 寻找双射种子
+  // Phase 3: Level 1 Consensus using integer hashes
   // -------------------------------------------------
   const seedWriter = new VarIntBuffer();
   const seedZeroBitmap = new Uint8Array(Math.ceil(m / 8));
 
   for (let i = 0; i < m; i++) {
-    const bucket = bestBuckets[i];
-    const k = bucket.length;
+    let k = 0;
+    let p = bestHead[i];
+    while (p !== -1) {
+      k++;
+      p = bestNext[p];
+    }
 
-    // 空桶或单元素桶不需要搜索，种子存 0
     if (k <= 1) {
-      // Mark as zero
       seedZeroBitmap[i >>> 3] |= 1 << (i & 7);
       continue;
     }
 
     let s = 0;
     let found = false;
-
-    // 动态调整最大尝试次数，避免死循环
-    // k 越大，需要的尝试次数呈指数级增长
     const MAX_TRIALS = k > 14 ? 50_000_000 : 5_000_000;
 
     while (!found) {
       let visited = 0;
       let collision = false;
 
-      for (const key of bucket) {
-        const h = murmurHash3_32(key, s);
+      let ptr = bestHead[i];
+      while (ptr !== -1) {
+        // Fast 64-bit hash simulation for slot placement
+        // pos = ((scramble(low, s) ^ high) >>> 0) % k
+        const h = (scramble(hashesL[ptr], s) ^ hashesH[ptr]) >>> 0;
         const pos = h % k;
-
-        // 检查位是否被占用
+        
         if ((visited & (1 << pos)) !== 0) {
           collision = true;
           break;
         }
         visited |= 1 << pos;
+        ptr = bestNext[ptr];
       }
 
       if (!collision) {
-        if (s === 0) {
-          seedZeroBitmap[i >>> 3] |= 1 << (i & 7);
-        } else {
-          seedWriter.write(s);
-        }
+        if (s === 0) seedZeroBitmap[i >>> 3] |= 1 << (i & 7);
+        else seedWriter.write(s);
         found = true;
       } else {
         s++;
-        if (s > MAX_TRIALS) {
-          throw new Error(
-            `MPHF Failed: Bucket ${i} (size ${k}) is too hard to hash.`
-          );
-        }
+        if (s > MAX_TRIALS)
+          throw new Error(`MPHF Failed: Bucket ${i} (size ${k}) is too hard.`);
       }
     }
   }
 
-  // 基础字典构建完成
   const dict: IMinMPHashDict = {
     n,
     m,
     seed0: bestSeed0,
+    hashSeed,
     seedStream: seedWriter.toUint8Array(),
     bucketSizes,
     seedZeroBitmap,
@@ -284,56 +356,35 @@ export function createMinMPHashDict(
   };
 
   // -------------------------------------------------
-  // Phase 4: 生成校验指纹 (如果启用)
+  // Phase 4: fingerprints
   // -------------------------------------------------
   if (validationMode !== "none") {
-    // 分配内存
     let fingerprints: Uint8Array | Uint16Array | Uint32Array;
-    if (validationMode === "2") {
-      fingerprints = new Uint8Array(Math.ceil(n / 4));
-    } else if (validationMode === "4") {
+    if (validationMode === "2") fingerprints = new Uint8Array(Math.ceil(n / 4));
+    else if (validationMode === "4")
       fingerprints = new Uint8Array(Math.ceil(n / 2));
-    } else if (validationMode === "8") {
-      fingerprints = new Uint8Array(n);
-    } else if (validationMode === "16") {
-      fingerprints = new Uint16Array(n);
-    } else if (validationMode === "32") {
-      fingerprints = new Uint32Array(n);
-    } else {
-      throw new Error(`Invalid validationMode: ${validationMode}`);
-    }
+    else if (validationMode === "8") fingerprints = new Uint8Array(n);
+    else if (validationMode === "16") fingerprints = new Uint16Array(n);
+    else fingerprints = new Uint32Array(n);
 
-    // 创建临时 Hasher 计算索引
-    // 为了避免把 `dict` 带入 fingerprints 字段导致循环，我们复制一份 clean 的 config
     const tempHasher = new MinMPHash({ ...dict, validationMode: "none" });
-    const FP_SEED = 0x1234abcd; // 固定的指纹种子
+    const FP_SEED = 0x1234abcd;
 
-    for (const key of dataSet) {
+    for (let i = 0; i < n; i++) {
+      const key = dataSet[i];
       const idx = tempHasher.hash(key);
-
-      // 只有当 key 确实在集合中 (理论上必定在) 且索引有效时
       if (idx >= 0 && idx < n) {
         const fullHash = murmurHash3_32(key, FP_SEED);
-
         if (validationMode === "2") {
-          // --- 2-bit 紧凑存储 ---
-          const fp2 = fullHash & 0x03; // 取低 2 位
-          const byteIdx = idx >>> 2; // idx / 4
-          const shift = (idx & 3) << 1; // (idx % 4) * 2
-
+          const fp2 = fullHash & 0x03;
+          const byteIdx = idx >>> 2;
+          const shift = (idx & 3) << 1;
           fingerprints[byteIdx] |= fp2 << shift;
         } else if (validationMode === "4") {
-          // --- 4-bit 紧凑存储 ---
-          const fp4 = fullHash & 0x0f; // 取低 4 位
-          const byteIdx = idx >>> 1; // idx / 2
-
-          if ((idx & 1) === 0) {
-            // 偶数索引：存低 4 位
-            fingerprints[byteIdx] |= fp4;
-          } else {
-            // 奇数索引：存高 4 位
-            fingerprints[byteIdx] |= fp4 << 4;
-          }
+          const fp4 = fullHash & 0x0f;
+          const byteIdx = idx >>> 1;
+          if ((idx & 1) === 0) fingerprints[byteIdx] |= fp4;
+          else fingerprints[byteIdx] |= fp4 << 4;
         } else if (validationMode === "8") {
           fingerprints[idx] = fullHash & 0xff;
         } else if (validationMode === "16") {
@@ -343,18 +394,14 @@ export function createMinMPHashDict(
         }
       }
     }
-
     dict.fingerprints = fingerprints;
   }
 
   if (options?.outputBinary) {
     const binary = dictToCBOR(dict);
-    if (options.enableCompression) {
-      return compressIBinary(binary);
-    }
+    if (options.enableCompression) return compressIBinary(binary);
     return binary;
   }
-
   return dict;
 }
 
@@ -374,6 +421,7 @@ export class MinMPHash {
   private n: number;
   private m: number;
   private seed0: number;
+  private hashSeed: number;
 
   // 运行时解压的数据
   private offsets: Uint32Array;
@@ -407,6 +455,7 @@ export class MinMPHash {
     this.n = dict.n;
     this.m = dict.m;
     this.seed0 = dict.seed0;
+    this.hashSeed = dict.hashSeed || 0;
     this.validationMode = dict.validationMode || "none";
 
     if (this.n === 0) {
@@ -495,57 +544,49 @@ export class MinMPHash {
   public hash(input: string): number {
     if (this.n === 0) return -1;
 
-    // --- Step 1: 最小完美哈希计算 ---
+    // --- 优化后的哈希计算 ---
+    // 1. 只进行一次字符串哈希 (Base Hash)
+    const h1 = murmurHash3_32(input, this.hashSeed);
+    const h2 = murmurHash3_32(input, ~this.hashSeed);
 
-    // Level 0: 定位桶
-    const h1 = murmurHash3_32(input, this.seed0);
-    const bIdx = Math.floor((h1 / 0x100000000) * this.m);
+    // 2. Level 0: 整数混淆定位桶
+    // bIdx = ((scramble(low, seed0) ^ high) >>> 0) % m
+    const h0 = (scramble(h1, this.seed0) ^ h2) >>> 0;
+    const bIdx = Math.floor((h0 / 4294967296) * this.m);
 
-    // 获取桶元数据
     const offset = this.offsets[bIdx];
     const nextOffset = this.offsets[bIdx + 1];
     const bucketSize = nextOffset - offset;
 
-    // 空桶检查
     if (bucketSize === 0) return -1;
 
     let resultIdx = 0;
-
-    // Level 1: 桶内定位
     if (bucketSize === 1) {
       resultIdx = offset;
     } else {
       const s = this.seeds[bIdx];
-      const h2 = murmurHash3_32(input, s);
-      resultIdx = offset + (h2 % bucketSize);
+      // pos = ((scramble(low, s) ^ high) >>> 0) % k
+      const h = (scramble(h1, s) ^ h2) >>> 0;
+      resultIdx = offset + (h % bucketSize);
     }
 
-    // --- Step 2: 指纹校验 ---
+    // --- 指纹校验 (保持原逻辑) ---
     if (this.validationMode !== "none" && this.fingerprints) {
       const fpHash = murmurHash3_32(input, MinMPHash.FP_SEED);
 
       if (this.validationMode === "2") {
-        // 2-bit 校验
         const expectedFp2 = fpHash & 0x03;
         const byteIdx = resultIdx >>> 2;
         const shift = (resultIdx & 3) << 1;
-        const storedFp2 = (this.fingerprints[byteIdx] >>> shift) & 0x03;
-
-        if (storedFp2 !== expectedFp2) return -1;
+        // Revert to original failing code but with logging
+        if (((this.fingerprints[byteIdx] >>> shift) & 0x03) !== expectedFp2)
+          return -1;
       } else if (this.validationMode === "4") {
-        // 4-bit 校验
         const expectedFp4 = fpHash & 0x0f;
-
         const byteIdx = resultIdx >>> 1;
         const storedByte = this.fingerprints[byteIdx];
-
-        let storedFp4 = 0;
-        if ((resultIdx & 1) === 0) {
-          storedFp4 = storedByte & 0x0f; // 偶数: 低4位
-        } else {
-          storedFp4 = (storedByte >>> 4) & 0x0f; // 奇数: 高4位
-        }
-
+        const storedFp4 =
+          (resultIdx & 1) === 0 ? storedByte & 0x0f : (storedByte >>> 4) & 0x0f;
         if (storedFp4 !== expectedFp4) return -1;
       } else if (this.validationMode === "8") {
         if (this.fingerprints[resultIdx] !== (fpHash & 0xff)) return -1;
@@ -562,6 +603,19 @@ export class MinMPHash {
 // ---------------------------------------------------------
 // 核心哈希 (MurmurHash3 32-bit 简化版)
 // ---------------------------------------------------------
+// ---------------------------------------------------------
+// 整数混淆函数 (Scramble)
+// 用于在已预计算的 hash 基础上根据不同 seed 生成新的伪随机值
+// ---------------------------------------------------------
+function scramble(k: number, seed: number): number {
+  k ^= seed;
+  k = Math.imul(k, 0x85ebca6b);
+  k ^= k >>> 13;
+  k = Math.imul(k, 0xc2b2ae35);
+  k ^= k >>> 16;
+  return k >>> 0;
+}
+
 function murmurHash3_32(key: string, seed: number): number {
   let h1 = seed;
   const c1 = 0xcc9e2d51;

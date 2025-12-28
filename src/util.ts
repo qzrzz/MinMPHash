@@ -108,8 +108,8 @@ const INT_TO_MODE: IValidationMode[] = ["none", "4", "8", "16", "32", "2"]
 export function dictToCBOR(dict: IMinMPHashDict): Uint8Array {
     const buffer: number[] = []
 
-    // 结构：Array(8) [n, m, seed0, bucketSizes, seedStream, mode, fingerprints, seedZeroBitmap]
-    CBOR.encodeArrayHead(8, buffer)
+    // 结构：Array(9) [n, m, seed0, bucketSizes, seedStream, mode, fingerprints, seedZeroBitmap, hashSeed]
+    CBOR.encodeArrayHead(9, buffer)
 
     CBOR.encodeInt(dict.n, buffer)
     CBOR.encodeInt(dict.m, buffer)
@@ -144,6 +144,8 @@ export function dictToCBOR(dict: IMinMPHashDict): Uint8Array {
         CBOR.encodeNull(buffer)
     }
 
+    CBOR.encodeInt(dict.hashSeed || 0, buffer)
+
     return new Uint8Array(buffer)
 }
 
@@ -156,7 +158,7 @@ export function dictFromCBOR(bin: Uint8Array): IMinMPHashDict {
 
     if (!Array.isArray(arr) || arr.length < 7) throw new Error("Invalid CBOR format")
 
-    const [n, m, seed0, bucketSizes, seedStream, modeInt, fpRaw, seedZeroBitmap] = arr
+    const [n, m, seed0, bucketSizes, seedStream, modeInt, fpRaw, seedZeroBitmap, hashSeed] = arr
 
     const validationMode = INT_TO_MODE[modeInt] || "none"
     let fingerprints: Uint8Array | Uint16Array | Uint32Array | undefined
@@ -175,6 +177,7 @@ export function dictFromCBOR(bin: Uint8Array): IMinMPHashDict {
         n,
         m,
         seed0,
+        hashSeed: hashSeed || 0,
         bucketSizes,
         seedStream,
         validationMode,
