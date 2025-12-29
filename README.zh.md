@@ -4,7 +4,7 @@
 
 [English README](./README.en.md)
 
-TypeScript/JavaScript 平台上的最小完美哈希与查找工具实现。
+TypeScript/JavaScript 平台上的最小完美哈希与查找工具实现。如果只使用哈希函数包体积小于 3KB(Gzip)。
 
 `MinMPHash` 可以把一组数量为 n 的字符串映射到 `[0, n-1]` 的整数范围内，且不会有冲突。
 
@@ -121,6 +121,19 @@ let found = Object.entries(FontMapWithHash).find(([family, hashes]) =>
 
 ```bash
 npm install min-mphash
+```
+
+此包仅提供 ESM，使用构建工具可以很的进行 tree-shaking 以减小体积。
+
+```
+// hash build & hush function
+min-mphash/index.js         34.7 kB
+min-mphash/index.min.js     14.6 kB   4.9 kB（Gzip）
+
+
+// hush function only
+min-mphash/runtime.js       18.3 kB
+min-mphash/runtime.min.js   7.9 kB    2.8 kB（Gzip）
 ```
 
 ### MinMPHash 最小完美哈希的使用

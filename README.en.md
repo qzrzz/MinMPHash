@@ -4,7 +4,7 @@
 
 [中文 README](./README.zh.md)
 
-`MinMPHash` can map a set of n strings to the integer range `[0, n-1]` without any collisions.
+`MinMPHash` can map a set of n strings to the integer range `[0, n-1]` without any collisions. If only the hash function is used, the package size is less than 3KB (Gzip).
 
 `MinMPLookup` is a minimal perfect lookup table tool implemented based on `MinMPHash`.
 
@@ -119,6 +119,19 @@ You might think that hash functions like MD5 or SHA-1 can also generate identifi
 
 ```bash
 npm install min-mphash
+```
+
+This package only provides ESM, and using build tools can effectively perform tree-shaking to reduce the size.
+
+```
+// hash build & hush function
+min-mphash/index.js         34.7 kB
+min-mphash/index.min.js     14.6 kB   4.9 kB（Gzip）
+
+
+// hush function only
+min-mphash/runtime.js       18.3 kB
+min-mphash/runtime.min.js   7.9 kB    2.8 kB（Gzip）
 ```
 
 ### MinMPHash Usage
