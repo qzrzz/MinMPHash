@@ -27,7 +27,7 @@ export interface IMinMPLookupDict {
    * Mode 1: Value -> Key (Direct 1-to-1)
    * 存储每个 Value Hash 对应的 Key Index。
    * 这是一个紧凑的数组，长度为 TotalValues。
-   * 
+   *
    * 结构: ValueHash -> KeyIndex (Bit-packed)
    */
   valueToKeyIndexes?: Uint8Array;
@@ -38,7 +38,7 @@ export interface IMinMPLookupDict {
    * Used when valueToKeyIndexes is present.
    * If a value in valueToKeyIndexes equals `keys.length`, it means there are multiple keys.
    * This map stores the actual keys for those collision cases.
-   * 
+   *
    * Structure: ValueHash -> KeyIndex[]
    */
   collisionMap?: Map<number, number[]>;
@@ -149,7 +149,7 @@ export function createMinMPLookupDict(
   // Heuristic: If collisions are rare (< 10%?), use Hybrid Mode (Mode 1 + Collision Map)
   // Otherwise use Mode 0.
   // For very small datasets, Mode 0 might be better anyway.
-  const isMostlyOneToOne = collisionCount < (allValues.length * 0.1);
+  const isMostlyOneToOne = collisionCount < allValues.length * 0.1;
 
   let dict: IMinMPLookupDict;
 
@@ -160,11 +160,11 @@ export function createMinMPLookupDict(
     const bitsPerKey = Math.ceil(Math.log2(keys.length + 1));
     const bw = new BitWriter();
     const collisionMap = new Map<number, number[]>();
-    
+
     // We need to map ValueHash -> KeyIndex
     // Since we can't iterate by hash easily without storing, let's build a temporary array.
     const valueToKeyMap = new Int32Array(mph.n).fill(-1);
-    
+
     for (const [v, kIndices] of valueToKeys) {
       const h = mph.hash(v);
       if (h >= 0) {
@@ -193,7 +193,6 @@ export function createMinMPLookupDict(
       bitsPerKey,
       collisionMap: collisionMap.size > 0 ? collisionMap : undefined,
     };
-
   } else {
     // Mode 0: Key -> Hashes (Original)
     // 3. Build Key -> Hashes Map
@@ -264,7 +263,7 @@ export function serializeMinMPLookupDict(dict: IMinMPLookupDict): Uint8Array {
 
   if (dict.valueToKeyIndexes && dict.bitsPerKey !== undefined) {
     // Mode 1 / Hybrid: Value -> Key
-    parts.push(writeU32(0xFFFFFFFF)); 
+    parts.push(writeU32(0xffffffff));
     parts.push(writeU32(dict.bitsPerKey));
     parts.push(writeU32(dict.valueToKeyIndexes.length));
     parts.push(dict.valueToKeyIndexes);
@@ -275,13 +274,15 @@ export function serializeMinMPLookupDict(dict: IMinMPLookupDict): Uint8Array {
       const colBuffer: number[] = [];
       writeVarInt(dict.collisionMap.size, colBuffer);
       // Sort by hash for determinism
-      const sortedHashes = Array.from(dict.collisionMap.keys()).sort((a, b) => a - b);
-      
+      const sortedHashes = Array.from(dict.collisionMap.keys()).sort(
+        (a, b) => a - b
+      );
+
       let prevHash = 0;
       for (const h of sortedHashes) {
         writeVarInt(h - prevHash, colBuffer);
         prevHash = h;
-        
+
         const kIndices = dict.collisionMap.get(h)!;
         writeVarInt(kIndices.length, colBuffer);
         // Key indices are likely small and close? Maybe not. Just VarInt them.
@@ -299,7 +300,6 @@ export function serializeMinMPLookupDict(dict: IMinMPLookupDict): Uint8Array {
     } else {
       parts.push(writeU32(0)); // No collision map
     }
-
   } else if (dict.keyToHashes) {
     // Mode 0: Key -> Hashes
     // 3. KeyToHashes (Delta Encoded with Bit Packing)
@@ -326,7 +326,7 @@ export function serializeMinMPLookupDict(dict: IMinMPLookupDict): Uint8Array {
       if (maxDelta > 0) {
         bits = Math.ceil(Math.log2(maxDelta + 1));
       }
-      
+
       hashBuffer.push(bits);
 
       // Write deltas
@@ -335,8 +335,8 @@ export function serializeMinMPLookupDict(dict: IMinMPLookupDict): Uint8Array {
         bw.write(d, bits);
       }
       const packed = bw.getData();
-      for(let i = 0; i < packed.length; i++) {
-          hashBuffer.push(packed[i]);
+      for (let i = 0; i < packed.length; i++) {
+        hashBuffer.push(packed[i]);
       }
     }
     const hashBytes = new Uint8Array(hashBuffer);
@@ -382,8 +382,8 @@ function deserializeLookupDict(data: Uint8Array): IMinMPLookupDict {
 
   // 3. KeyToHashes or ValueToKey
   const sectionLen = readU32();
-  
-  if (sectionLen === 0xFFFFFFFF) {
+
+  if (sectionLen === 0xffffffff) {
     // Mode 1 / Hybrid: Value -> Key
     const bitsPerKey = readU32();
     const dataLen = readU32();
@@ -393,26 +393,26 @@ function deserializeLookupDict(data: Uint8Array): IMinMPLookupDict {
     // Read Collision Map
     const colMapLen = readU32();
     let collisionMap: Map<number, number[]> | undefined;
-    
+
     if (colMapLen > 0) {
       const colBytes = data.subarray(offset, offset + colMapLen);
       offset += colMapLen;
-      
+
       collisionMap = new Map();
       let cOffset = 0;
       const { value: count, bytes: b1 } = readVarInt(colBytes, cOffset);
       cOffset += b1;
-      
+
       let prevHash = 0;
       for (let i = 0; i < count; i++) {
         const { value: deltaHash, bytes: b2 } = readVarInt(colBytes, cOffset);
         cOffset += b2;
         const h = prevHash + deltaHash;
         prevHash = h;
-        
+
         const { value: kCount, bytes: b3 } = readVarInt(colBytes, cOffset);
         cOffset += b3;
-        
+
         const kIndices: number[] = [];
         let prevKey = 0;
         for (let j = 0; j < kCount; j++) {
@@ -457,7 +457,7 @@ function deserializeLookupDict(data: Uint8Array): IMinMPLookupDict {
       // Calculate bytes used by packed deltas
       const totalBits = bits * count;
       const packedBytesLen = Math.ceil(totalBits / 8);
-      
+
       const packedData = hashBytes.subarray(hOffset, hOffset + packedBytesLen);
       hOffset += packedBytesLen;
 
@@ -502,6 +502,7 @@ function deserializeLookupDict(data: Uint8Array): IMinMPLookupDict {
  */
 export class MinMPLookup {
   private mph: MinMPHash;
+  private dict: IMinMPLookupDict;
   private _invertedIndex: number[][] | null = null;
 
   static async fromCompressed(data: Uint8Array): Promise<MinMPLookup> {
@@ -515,7 +516,13 @@ export class MinMPLookup {
     return new MinMPLookup(dict);
   }
 
-  constructor(private dict: IMinMPLookupDict) {
+  constructor(dict: IMinMPLookupDict | Uint8Array) {
+    if (dict instanceof Uint8Array) {
+      dict = deserializeLookupDict(dict);
+    }
+
+    this.dict = dict;
+
     this.mph = new MinMPHash(dict.mmpHashDictBin);
     if (dict.keyToHashes) {
       this.buildInvertedIndex();
@@ -524,11 +531,11 @@ export class MinMPLookup {
 
   private buildInvertedIndex() {
     if (!this.dict.keyToHashes) return;
-    
+
     const n = this.mph.n;
     // Initialize array of arrays
     this._invertedIndex = Array.from({ length: n }, () => []);
-    
+
     for (let i = 0; i < this.dict.keys.length; i++) {
       const hashes = this.dict.keyToHashes[i];
       for (let j = 0; j < hashes.length; j++) {
@@ -548,9 +555,13 @@ export class MinMPLookup {
     if (this.dict.valueToKeyIndexes && this.dict.bitsPerKey) {
       const h = this.mph.hash(value);
       if (h < 0 || h >= this.mph.n) return null;
-      
-      const keyIdx = readBitsAt(this.dict.valueToKeyIndexes, h * this.dict.bitsPerKey, this.dict.bitsPerKey);
-      
+
+      const keyIdx = readBitsAt(
+        this.dict.valueToKeyIndexes,
+        h * this.dict.bitsPerKey,
+        this.dict.bitsPerKey
+      );
+
       // Check for collision marker
       if (keyIdx === this.dict.keys.length) {
         // Look in collision map
@@ -579,15 +590,19 @@ export class MinMPLookup {
     if (this.dict.valueToKeyIndexes && this.dict.bitsPerKey) {
       const h = this.mph.hash(value);
       if (h < 0 || h >= this.mph.n) return null;
-      
-      const keyIdx = readBitsAt(this.dict.valueToKeyIndexes, h * this.dict.bitsPerKey, this.dict.bitsPerKey);
-      
+
+      const keyIdx = readBitsAt(
+        this.dict.valueToKeyIndexes,
+        h * this.dict.bitsPerKey,
+        this.dict.bitsPerKey
+      );
+
       // Check for collision marker
       if (keyIdx === this.dict.keys.length) {
         // Look in collision map
         if (this.dict.collisionMap && this.dict.collisionMap.has(h)) {
           const indices = this.dict.collisionMap.get(h)!;
-          return indices.map(i => this.dict.keys[i]);
+          return indices.map((i) => this.dict.keys[i]);
         }
         return null;
       }
