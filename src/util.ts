@@ -33,6 +33,41 @@ export function readVarInt(buffer: Uint8Array, offset: number): { value: number;
   }
   return { value: val, bytes };
 }
+
+export function writeVarBigInt(val: bigint, buffer: number[] | Uint8Array, offset?: number): number {
+  let bytes = 0;
+  while (val >= 0x80n) {
+    const b = Number((val & 0x7fn) | 0x80n);
+    if (Array.isArray(buffer)) {
+      buffer.push(b);
+    } else if (offset !== undefined) {
+      buffer[offset + bytes] = b;
+    }
+    val >>= 7n;
+    bytes++;
+  }
+  const b = Number(val);
+  if (Array.isArray(buffer)) {
+    buffer.push(b);
+  } else if (offset !== undefined) {
+    buffer[offset + bytes] = b;
+  }
+  return bytes + 1;
+}
+
+export function readVarBigInt(buffer: Uint8Array, offset: number): { value: bigint; bytes: number } {
+  let val = 0n;
+  let shift = 0n;
+  let bytes = 0;
+  while (true) {
+    const b = buffer[offset + bytes];
+    val |= BigInt(b & 0x7f) << shift;
+    bytes++;
+    if ((b & 0x80) === 0) break;
+    shift += 7n;
+  }
+  return { value: val, bytes };
+}
  
 const CBOR = {
     // 写入无符号整数

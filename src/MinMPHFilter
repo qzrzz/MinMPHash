@@ -1,0 +1,427 @@
+import {
+  BitReader,
+  BitWriter,
+  compressIBinary,
+  decompressIBinary,
+  readVarInt,
+  writeVarInt,
+  readVarBigInt,
+  writeVarBigInt,
+} from "./util";
+
+export interface IMinMPHFilterOptions {
+  outputBinary?: boolean;
+  enableCompression?: boolean;
+  /**
+   * Golomb-Compressed Sets (GCS) 中的参数 K，决定每个元素占用的比特数，越大误判率越低，
+   * 误判率是**非集合中**的数据的查询时，误判为集合中的概率，如果查询是集合中的数据，结果一定是正确的。
+   * @default "8"
+   * 误判率表格：
+   *  - 6 : ~1.56%
+   *  - 7 : ~0.78%
+   *  - 8 : ~0.39%
+   *  - 9 : ~0.20%
+   *  - 10 : ~0.10%
+   *  - 11 : ~0.05%
+   *  - 12 : ~0.02%
+   *  - 13 : ~0.01%
+   *  - 14 : ~0.005%
+   *  - 15 : ~0.0025%
+   *  - 16 : ~0.0012%
+   */
+  bitKey?:
+    | "6"
+    | "7"
+    | "8"
+    | "9"
+    | "10"
+    | "11"
+    | "12"
+    | "13"
+    | "14"
+    | "15"
+    | "16";
+}
+
+export interface IMinMPHFilterDict {
+  n: number;
+  k: number;
+  data: Uint8Array;
+  checkpoints?: {
+    interval: number;
+    hashes: BigUint64Array;
+    offsets: Uint32Array;
+  };
+}
+
+/**
+ * 创建 MinMPHFilter 需要的字典
+ *
+ * MinMPHFilter 可以查询字典数据集中的 string 是否在该集合中
+ */
+export function createMinMPHFilterDict(
+  dataSet: string[],
+  options?: IMinMPHFilterOptions & {
+    outputBinary?: false;
+    enableCompression?: false;
+  }
+): IMinMPHFilterDict;
+
+export function createMinMPHFilterDict(
+  dataSet: string[],
+  options: IMinMPHFilterOptions & {
+    outputBinary: true;
+    enableCompression?: false;
+  }
+): Uint8Array;
+
+export function createMinMPHFilterDict(
+  dataSet: string[],
+  options: IMinMPHFilterOptions & {
+    outputBinary: true;
+    enableCompression: true;
+  }
+): Promise<Uint8Array>;
+
+export function createMinMPHFilterDict(
+  dataSet: string[],
+  options?: IMinMPHFilterOptions
+): IMinMPHFilterDict | Uint8Array | Promise<Uint8Array> {
+  const n = dataSet.length;
+  const k = parseInt(options?.bitKey || "8", 10);
+  // M = N * 2^K. Using BigInt to avoid overflow for large N.
+  const m = n === 0 ? 1n : BigInt(n) * (1n << BigInt(k));
+
+  // 1. Hash all keys (64-bit)
+  const hashes = new BigUint64Array(n);
+  const seed = 0x12345678; // Fixed seed
+  for (let i = 0; i < n; i++) {
+    hashes[i] = getHash(dataSet[i], seed, m);
+  }
+
+  // 2. Sort hashes
+  hashes.sort();
+
+  // 3. Encode using GCS (Rice Coding)
+  const writer = new BitWriter();
+  const checkpointInterval = 128;
+  const checkpointHashes: bigint[] = [];
+  const checkpointOffsets: number[] = [];
+
+  let lastHash = 0n;
+  let bitCount = 0; // Track total bits written
+
+  for (let i = 0; i < n; i++) {
+    const h = hashes[i];
+    const delta = h - lastHash;
+
+    // Checkpoint
+    if (i % checkpointInterval === 0) {
+      checkpointHashes.push(lastHash);
+      checkpointOffsets.push(bitCount);
+    }
+
+    lastHash = h;
+
+    // Rice Coding of delta
+    // Quotient q = delta >> k
+    // Remainder r = delta % (1 << k)
+    const divisor = 1n << BigInt(k);
+    const q = delta / divisor;
+    const r = delta % divisor;
+
+    // Unary encode q: q 1s followed by 0
+    // q should be small on average, but can be large.
+    // We cast to Number for the loop, assuming q doesn't exceed safe integer limit (which is huge).
+    const qNum = Number(q);
+    for (let j = 0; j < qNum; j++) {
+      writer.write(1, 1);
+      bitCount++;
+    }
+    // Write 0
+    writer.write(0, 1);
+    bitCount++;
+
+    // Write r (k bits)
+    // r fits in k bits (max 16), so Number(r) is safe.
+    writer.write(Number(r), k);
+    bitCount += k;
+  }
+
+  const data = writer.getData();
+
+  const dict: IMinMPHFilterDict = {
+    n,
+    k,
+    data,
+    checkpoints: {
+      interval: checkpointInterval,
+      hashes: new BigUint64Array(checkpointHashes),
+      offsets: new Uint32Array(checkpointOffsets),
+    },
+  };
+
+  if (options?.outputBinary) {
+    const bin = dictToBinary(dict);
+    if (options.enableCompression) {
+      return compressIBinary(bin);
+    }
+    return bin;
+  }
+
+  return dict;
+}
+
+/**
+ * MinMPHFilter 可以查询字典数据集中的 string 是否在该集合中
+ * 使用 Golomb-Compressed Sets (GCS) 算法实现非常高效的空间占用率
+ */
+export class MinMPHFilter {
+  private n: number;
+  private k: number;
+  private m: bigint;
+  private data: Uint8Array;
+  private checkpoints?: {
+    interval: number;
+    hashes: BigUint64Array;
+    offsets: Uint32Array;
+  };
+
+  static async fromCompressed(data: Uint8Array): Promise<MinMPHFilter> {
+    const decompressed = await decompressIBinary(data);
+    return new MinMPHFilter(decompressed);
+  }
+
+  constructor(dictOrData: IMinMPHFilterDict | Uint8Array) {
+    if (dictOrData instanceof Uint8Array) {
+      const dict = dictFromBinary(dictOrData);
+      this.n = dict.n;
+      this.k = dict.k;
+      this.data = dict.data;
+      this.checkpoints = dict.checkpoints;
+    } else {
+      this.n = dictOrData.n;
+      this.k = dictOrData.k;
+      this.data = dictOrData.data;
+      this.checkpoints = dictOrData.checkpoints;
+    }
+    this.m = this.n === 0 ? 1n : BigInt(this.n) * (1n << BigInt(this.k));
+  }
+
+  has(key: string): boolean {
+    if (this.n === 0) return false;
+    const h = getHash(key, 0x12345678, this.m);
+    
+    // Find start point using checkpoints
+    let startHash = 0n;
+    let startBitOffset = 0;
+
+    if (this.checkpoints) {
+      // Binary search in checkpoints
+      let low = 0;
+      let high = this.checkpoints.hashes.length - 1;
+      let bestIdx = -1;
+
+      while (low <= high) {
+        const mid = (low + high) >>> 1;
+        if (this.checkpoints.hashes[mid] <= h) {
+          bestIdx = mid;
+          low = mid + 1;
+        } else {
+          high = mid - 1;
+        }
+      }
+
+      if (bestIdx !== -1) {
+        startHash = this.checkpoints.hashes[bestIdx];
+        startBitOffset = this.checkpoints.offsets[bestIdx];
+      }
+    }
+
+    // Scan from start point
+    const gcsReader = new GCSReader(this.data, startBitOffset);
+    let currentHash = startHash;
+    const divisor = 1n << BigInt(this.k);
+    
+    // We need to scan until we find h or exceed it.
+    
+    while (currentHash <= h) {
+      if (currentHash === h) return true;
+      
+      if (gcsReader.isEOF()) break;
+
+      // Decode next delta
+      // 1. Read unary q
+      let q = 0n;
+      while (gcsReader.readBit() === 1) {
+        q++;
+      }
+      // 2. Read binary r
+      const r = BigInt(gcsReader.readBits(this.k));
+      
+      const delta = q * divisor + r;
+      currentHash += delta;
+    }
+
+    return false;
+  }
+}
+
+// --- Helpers ---
+
+class GCSReader {
+  private buffer: Uint8Array;
+  private byteOffset: number;
+  private bitOffset: number;
+
+  constructor(buffer: Uint8Array, startBitOffset: number) {
+    this.buffer = buffer;
+    this.byteOffset = Math.floor(startBitOffset / 8);
+    this.bitOffset = startBitOffset % 8;
+  }
+
+  readBit(): number {
+    if (this.byteOffset >= this.buffer.length) return 0;
+    const bit = (this.buffer[this.byteOffset] >> this.bitOffset) & 1;
+    this.bitOffset++;
+    if (this.bitOffset === 8) {
+      this.byteOffset++;
+      this.bitOffset = 0;
+    }
+    return bit;
+  }
+
+  readBits(bits: number): number {
+    let value = 0;
+    for (let i = 0; i < bits; i++) {
+      value |= this.readBit() << i;
+    }
+    return value;
+  }
+
+  isEOF(): boolean {
+    return this.byteOffset >= this.buffer.length;
+  }
+}
+
+/**
+ * Generates a 64-bit hash using two 32-bit MurmurHash3 results.
+ * This effectively provides a 64-bit hash space to avoid collisions and capacity limits.
+ */
+function getHash(key: string, seed: number, m: bigint): bigint {
+  const h1 = murmurHash3_32(key, seed);
+  const h2 = murmurHash3_32(key, ~seed);
+  // Combine to 64-bit integer
+  // h1 is low 32 bits, h2 is high 32 bits
+  const fullHash = BigInt(h1 >>> 0) + (BigInt(h2 >>> 0) << 32n);
+  return fullHash % m;
+}
+
+function murmurHash3_32(key: string, seed: number): number {
+  let h1 = seed;
+  const c1 = 0xcc9e2d51;
+  const c2 = 0x1b873593;
+  const len = key.length;
+  
+  for (let i = 0; i < len; i++) {
+      let k1 = key.charCodeAt(i);
+      
+      k1 = Math.imul(k1, c1);
+      k1 = (k1 << 15) | (k1 >>> 17);
+      k1 = Math.imul(k1, c2);
+
+      h1 ^= k1;
+      h1 = (h1 << 13) | (h1 >>> 19);
+      h1 = Math.imul(h1, 5) + 0xe6546b64;
+  }
+
+  h1 ^= len;
+  h1 ^= h1 >>> 16;
+  h1 = Math.imul(h1, 0x85ebca6b);
+  h1 ^= h1 >>> 13;
+  h1 = Math.imul(h1, 0xc2b2ae35);
+  h1 ^= h1 >>> 16;
+  
+  return h1 >>> 0;
+}
+
+// --- Binary Serialization ---
+
+function dictToBinary(dict: IMinMPHFilterDict): Uint8Array {
+  const parts: number[] = [];
+  
+  // Header
+  writeVarInt(dict.n, parts);
+  writeVarInt(dict.k, parts);
+  
+  // Data
+  writeVarInt(dict.data.length, parts);
+  for (let i = 0; i < dict.data.length; i++) parts.push(dict.data[i]);
+  
+  // Checkpoints
+  if (dict.checkpoints) {
+    writeVarInt(1, parts); // Has checkpoints
+    writeVarInt(dict.checkpoints.interval, parts);
+    writeVarInt(dict.checkpoints.hashes.length, parts);
+    
+    // Delta encode hashes (using BigInt)
+    let lastH = 0n;
+    for (let i = 0; i < dict.checkpoints.hashes.length; i++) {
+      const h = dict.checkpoints.hashes[i];
+      writeVarBigInt(h - lastH, parts);
+      lastH = h;
+    }
+    
+    // Delta encode offsets
+    let lastOff = 0;
+    for (let i = 0; i < dict.checkpoints.offsets.length; i++) {
+      const off = dict.checkpoints.offsets[i];
+      writeVarInt(off - lastOff, parts);
+      lastOff = off;
+    }
+  } else {
+    writeVarInt(0, parts); // No checkpoints
+  }
+  
+  return new Uint8Array(parts);
+}
+
+function dictFromBinary(bin: Uint8Array): IMinMPHFilterDict {
+  let offset = 0;
+  
+  const { value: n, bytes: b1 } = readVarInt(bin, offset); offset += b1;
+  const { value: k, bytes: b2 } = readVarInt(bin, offset); offset += b2;
+  
+  const { value: dataLen, bytes: b3 } = readVarInt(bin, offset); offset += b3;
+  const data = bin.slice(offset, offset + dataLen);
+  offset += dataLen;
+  
+  const { value: hasCheckpoints, bytes: b4 } = readVarInt(bin, offset); offset += b4;
+  
+  let checkpoints: IMinMPHFilterDict['checkpoints'];
+  
+  if (hasCheckpoints) {
+    const { value: interval, bytes: b5 } = readVarInt(bin, offset); offset += b5;
+    const { value: count, bytes: b6 } = readVarInt(bin, offset); offset += b6;
+    
+    const hashes = new BigUint64Array(count);
+    let lastH = 0n;
+    for (let i = 0; i < count; i++) {
+      const { value: delta, bytes } = readVarBigInt(bin, offset); offset += bytes;
+      lastH += delta;
+      hashes[i] = lastH;
+    }
+    
+    const offsets = new Uint32Array(count);
+    let lastOff = 0;
+    for (let i = 0; i < count; i++) {
+      const { value: delta, bytes } = readVarInt(bin, offset); offset += bytes;
+      lastOff += delta;
+      offsets[i] = lastOff;
+    }
+    
+    checkpoints = { interval, hashes, offsets };
+  }
+  
+  return { n, k, data, checkpoints };
+}

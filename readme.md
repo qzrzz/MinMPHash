@@ -1,6 +1,6 @@
 <img src="./cover.jpeg" alt="MinMPHash Logo" width="100%" />
 
-# MinMPHash & MinMPLookup
+# MinMPHash & MinMPLookup & MinMPHFilter
 
 > Mini Minimal Perfect Hash & Mini Minimal Perfect Lookup
 
@@ -296,6 +296,44 @@ const lookupDictBin = createMinMPLookupDict(lookupMap, {
 });
 ```
 
+
+### MinMPHFilter Usage
+
+`MinMPHFilter` is a static set query tool similar to a Bloom filter. It can efficiently determine whether an element exists in a set with a configurable false positive rate.
+
+#### Background
+
+If you have a set of strings and need to query whether a specific string is in the set, and the set does not change frequently (regenerating the dictionary file is required for every change), you can use `MinMPHFilter`. It allows you to store this set with maximum space savings, with a storage size close to the information-theoretic limit.
+
+Its working principle is similar to a Bloom filter, but it is implemented using the GCS algorithm, providing higher space efficiency and a configurable false positive rate.
+
+#### Usage
+
+```typescript
+import { createMinMPHFilterDict, MinMPHFilter } from "min-mphash";
+// Create filter dictionary
+const filterDict = createMinMPHFilterDict(mySet, {
+  //  False Positive Rate:
+  //  *  - 6 : ~1.56%
+  //  *  - 7 : ~0.78%
+  //  *  - 8 : ~0.39%
+  //  *  - 9 : ~0.20%
+  //  *  - 10 : ~0.10%
+  //  *  - 11 : ~0.05%
+  //  *  - 12 : ~0.02%
+  //  *  - 13 : ~0.01%
+  //  *  - 14 : ~0.005%
+  //  *  - 15 : ~0.0025%
+  //  *  - 16 : ~0.0012%
+  bitKey: "8",
+  outputBinary: true, // Since the generated binary data has very high entropy, compression is basically unnecessary
+});
+
+// Use filter
+const filter = new MinMPHFilter(filterDict);
+console.log(filter.has("Apple")); // true
+```
+
 ## Benchmark
 
 ### MinMPHash Dictionary Size Benchmark
@@ -345,4 +383,27 @@ Dataset json gzip size:   5141.74 KB
   │ 16       │   1406.98 KB │  450.21 KB ( 32%)    │  395.21 KB ( 28%)    │      176.7 % │    421.70 ms │
   │ 32       │   2104.73 KB │  645.45 KB ( 31%)    │  591.02 KB ( 28%)    │      253.3 % │    374.06 ms │
   └──────────┴──────────────┴──────────────────────┴──────────────────────┴──────────────┴──────────────┘
+```
+
+
+#### MinMPHFilter Usage
+
+```
+=== MinMPHFilter Big Dataset Benchmark ===
+Generating dataset of size 100000...
+Dataset size: 100000 items
+
+Dataset json size:        11024.31 KB
+Dataset json gzip size:   7479.80 KB
+
+  ┌────────┬──────────────┬──────────────┬──────────────┬──────────────┬──────────────┐
+  │ BitKey │ Binary Size  │ Gzip Size    │ Build (ms)   │ Query 1 (ms) │ FPR (%)      │
+  ├────────┼──────────────┼──────────────┼──────────────┼──────────────┼──────────────┤
+  │ 6      │     95.67 KB │     94.94 KB │      65.2 ms │    0.0035 ms │      1.6140% │
+  │ 8      │    120.80 KB │    120.06 KB │      57.3 ms │    0.0034 ms │      0.4230% │
+  │ 10     │    145.22 KB │    144.54 KB │      57.2 ms │    0.0034 ms │      0.1110% │
+  │ 12     │    169.63 KB │    169.20 KB │      58.2 ms │    0.0037 ms │      0.0250% │
+  │ 14     │    194.41 KB │    193.74 KB │      60.1 ms │    0.0038 ms │      0.0070% │
+  │ 16     │    219.21 KB │    218.67 KB │      56.4 ms │    0.0040 ms │      0.0020% │
+  └────────┴──────────────┴──────────────┴──────────────┴──────────────┴──────────────┘
 ```
