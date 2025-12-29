@@ -298,6 +298,9 @@ const lookupDictBin = createMinMPLookupDict(lookupMap, {
 
 ```typescript
 import { createMinMPHFilterDict, MinMPHFilter } from "min-mphash";
+
+const mySet = ["Apple", "Banana", "Cherry", "Date", "Elderberry"];
+
 // 创建过滤器字典
 const filterDict = createMinMPHFilterDict(mySet, {
   //  误判率：

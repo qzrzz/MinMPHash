@@ -296,7 +296,6 @@ const lookupDictBin = createMinMPLookupDict(lookupMap, {
 });
 ```
 
-
 ### MinMPHFilter Usage
 
 `MinMPHFilter` is a static set query tool similar to a Bloom filter. It can efficiently determine whether an element exists in a set with a configurable false positive rate.
@@ -311,6 +310,9 @@ Its working principle is similar to a Bloom filter, but it is implemented using 
 
 ```typescript
 import { createMinMPHFilterDict, MinMPHFilter } from "min-mphash";
+
+const mySet = ["Apple", "Banana", "Cherry", "Date", "Elderberry"];
+
 // Create filter dictionary
 const filterDict = createMinMPHFilterDict(mySet, {
   //  False Positive Rate:
@@ -384,7 +386,6 @@ Dataset json gzip size:   5141.74 KB
   │ 32       │   2104.73 KB │  645.45 KB ( 31%)    │  591.02 KB ( 28%)    │      253.3 % │    374.06 ms │
   └──────────┴──────────────┴──────────────────────┴──────────────────────┴──────────────┴──────────────┘
 ```
-
 
 #### MinMPHFilter Usage
 

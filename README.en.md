@@ -297,6 +297,9 @@ Its working principle is similar to a Bloom filter, but it is implemented using 
 
 ```typescript
 import { createMinMPHFilterDict, MinMPHFilter } from "min-mphash";
+
+const mySet = ["Apple", "Banana", "Cherry", "Date", "Elderberry"];
+
 // Create filter dictionary
 const filterDict = createMinMPHFilterDict(mySet, {
   //  False Positive Rate:
