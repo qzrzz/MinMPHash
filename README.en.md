@@ -375,7 +375,7 @@ Dataset json gzip size:   5141.74 KB
 ```
 
 
-#### MinMPHFilter Usage
+### MinMPHFilter Dictionary Size Benchmark 
 
 ```
 === MinMPHFilter Big Dataset Benchmark ===
