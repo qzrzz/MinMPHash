@@ -1,6 +1,6 @@
 {
   "name": "min-mphash",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "type": "module",
   "author": "git@qzrzz.com",
   "license": "MIT",
@@ -9,11 +9,18 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime.d.ts",
+      "import": "./dist/runtime.js"
     }
   },
   "types": "./dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "README.zh.md",
+    "README.en.md"
   ],
   "scripts": {
     "build": "rslib build",
